@@ -7,28 +7,23 @@ import asyncio
 import json
 import logging
 from typing import Optional, Callable
-from dataclasses import dataclass
 from datetime import datetime
 
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from .base_client import ChatClient, ChatMessage
+
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ChatMessage:
-    """채팅 메시지 데이터 클래스"""
-    user: str
-    message: str
-    timestamp: datetime
-    emoticons: list[str]
-    channel_id: str
-    message_id: Optional[str] = None
-
-
-class ChzzkWebSocketClient:
+class ChzzkWebSocketClient(ChatClient):
     """치지직 WebSocket 클라이언트"""
+    
+    @property
+    def platform_name(self) -> str:
+        """플랫폼 이름"""
+        return "chzzk"
     
     def __init__(
         self,
@@ -46,17 +41,11 @@ class ChzzkWebSocketClient:
             reconnect_delay: 재연결 지연 시간 (초)
             max_reconnect_attempts: 최대 재연결 시도 횟수
         """
-        self.channel_id = channel_id
+        super().__init__(channel_id, on_message, reconnect_delay, max_reconnect_attempts)
         self.access_token = access_token
-        self.on_message = on_message
-        self.reconnect_delay = reconnect_delay
-        self.max_reconnect_attempts = max_reconnect_attempts
         
-        # WebSocket 연결 상태
+        # WebSocket 연결
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
-        self.is_connected = False
-        self.reconnect_attempts = 0
-        self._running = False
         
         # WebSocket 엔드포인트 (실제 API 문서 확인 후 수정 필요)
         # TODO: 실제 치지직 WebSocket 엔드포인트로 변경
@@ -70,14 +59,14 @@ class ChzzkWebSocketClient:
             if self.access_token:
                 headers["Authorization"] = f"Bearer {self.access_token}"
             
-            logger.info(f"치지직 WebSocket 연결 시도: {self.ws_url}")
+            logger.info(f"[{self.platform_name}] WebSocket 연결 시도: {self.ws_url}")
             self.websocket = await websockets.connect(
                 self.ws_url,
                 extra_headers=headers
             )
             self.is_connected = True
             self.reconnect_attempts = 0
-            logger.info("치지직 WebSocket 연결 성공")
+            logger.info(f"[{self.platform_name}] WebSocket 연결 성공")
             
             # 채널 구독 메시지 전송 (실제 포맷 확인 필요)
             await self._subscribe_channel()
@@ -99,11 +88,10 @@ class ChzzkWebSocketClient:
     
     async def disconnect(self):
         """WebSocket 연결 종료"""
-        self._running = False
         if self.websocket:
             await self.websocket.close()
             self.is_connected = False
-            logger.info("WebSocket 연결 종료")
+            logger.info(f"[{self.platform_name}] WebSocket 연결 종료")
     
     async def _handle_message(self, raw_message: str):
         """수신한 메시지 처리"""
@@ -113,13 +101,15 @@ class ChzzkWebSocketClient:
             # TODO: 실제 메시지 구조에 맞게 파싱 로직 수정
             # 예시 구조 (실제 구조 확인 필요)
             if data.get("type") == "chat":
-                message = ChatMessage(
+                message = self._create_message(
                     user=data.get("user", ""),
                     message=data.get("message", ""),
-                    timestamp=datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat())),
+                    timestamp=datetime.fromisoformat(
+                        data.get("timestamp", datetime.now().isoformat())
+                    ),
                     emoticons=data.get("emoticons", []),
-                    channel_id=self.channel_id,
-                    message_id=data.get("messageId")
+                    message_id=data.get("messageId"),
+                    user_id=data.get("userId")
                 )
                 
                 if self.on_message:
@@ -130,25 +120,6 @@ class ChzzkWebSocketClient:
         except Exception as e:
             logger.error(f"메시지 처리 중 오류: {e}")
     
-    async def _reconnect(self):
-        """재연결 시도 (지수 백오프)"""
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            logger.error(f"최대 재연결 시도 횟수({self.max_reconnect_attempts}) 초과")
-            return False
-        
-        delay = self.reconnect_delay * (2 ** self.reconnect_attempts)
-        self.reconnect_attempts += 1
-        
-        logger.info(f"재연결 시도 {self.reconnect_attempts}/{self.max_reconnect_attempts} ({delay}초 후)")
-        await asyncio.sleep(delay)
-        
-        try:
-            await self.connect()
-            return True
-        except Exception as e:
-            logger.error(f"재연결 실패: {e}")
-            return False
-    
     async def listen(self):
         """메시지 수신 루프"""
         self._running = True
@@ -156,7 +127,7 @@ class ChzzkWebSocketClient:
         while self._running:
             try:
                 if not self.is_connected:
-                    if not await self._reconnect():
+                    if not await super()._reconnect():
                         break
                     continue
                 
@@ -188,11 +159,3 @@ class ChzzkWebSocketClient:
                 logger.error(f"예상치 못한 오류: {e}")
                 self.is_connected = False
     
-    async def start(self):
-        """클라이언트 시작"""
-        await self.connect()
-        await self.listen()
-    
-    async def stop(self):
-        """클라이언트 중지"""
-        await self.disconnect()

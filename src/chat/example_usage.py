@@ -1,11 +1,16 @@
 """
-치지직 WebSocket 클라이언트 사용 예제
+채팅 클라이언트 사용 예제
+다양한 플랫폼 지원 예제
 """
 
 import asyncio
 import logging
-from chzzk_client import ChzzkWebSocketClient, ChatMessage
-from chat_parser import ChatParser, FilterConfig
+from chat import (
+    ChatClientFactory,
+    ChatMessage,
+    ChatParser,
+    FilterConfig
+)
 
 # 로깅 설정
 logging.basicConfig(
@@ -32,15 +37,19 @@ async def main():
     
     parser = ChatParser(filter_config)
     
-    # WebSocket 클라이언트 생성
+    # 팩토리를 사용하여 클라이언트 생성 (플랫폼 변경이 쉬움)
     # TODO: 실제 채널 ID와 액세스 토큰으로 변경
-    client = ChzzkWebSocketClient(
+    client = ChatClientFactory.create(
+        platform="chzzk",  # "youtube", "twitch" 등으로 쉽게 변경 가능
         channel_id="YOUR_CHANNEL_ID",  # 실제 채널 ID로 변경
         access_token="YOUR_ACCESS_TOKEN",  # 필요시 토큰 추가
         on_message=on_chat_message,
         reconnect_delay=5.0,
         max_reconnect_attempts=10
     )
+    
+    print(f"지원 플랫폼: {ChatClientFactory.get_supported_platforms()}")
+    print(f"현재 플랫폼: {client.platform_name}")
     
     try:
         # 클라이언트 시작
