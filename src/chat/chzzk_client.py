@@ -49,7 +49,10 @@ class ChzzkWebSocketClient(ChatClient):
         
         # WebSocket 엔드포인트 (실제 API 문서 확인 후 수정 필요)
         # TODO: 실제 치지직 WebSocket 엔드포인트로 변경
-        self.ws_url = f"wss://kr-ss1.chat.naver.com/chat"  # 예시 URL
+        # 확인 방법: docs/CHZZK_API_RESEARCH.md 참고
+        # 1. 브라우저 DevTools에서 WebSocket 연결 확인
+        # 2. 기존 오픈소스 프로젝트 분석 (chzzk-tts 등)
+        self.ws_url = f"wss://kr-ss1.chat.naver.com/chat"  # 예시 URL (수정 필요)
         
     async def connect(self):
         """WebSocket 연결"""
@@ -79,6 +82,8 @@ class ChzzkWebSocketClient(ChatClient):
     async def _subscribe_channel(self):
         """채널 구독 메시지 전송"""
         # TODO: 실제 치지직 구독 메시지 포맷 확인 후 수정
+        # 확인 방법: docs/CHZZK_API_RESEARCH.md 참고
+        # 브라우저 DevTools에서 실제 구독 메시지 확인
         subscribe_message = {
             "type": "subscribe",
             "channelId": self.channel_id
@@ -99,6 +104,8 @@ class ChzzkWebSocketClient(ChatClient):
             data = json.loads(raw_message)
             
             # TODO: 실제 메시지 구조에 맞게 파싱 로직 수정
+            # 확인 방법: docs/CHZZK_API_RESEARCH.md 참고
+            # 브라우저 DevTools에서 실제 메시지 포맷 확인
             # 예시 구조 (실제 구조 확인 필요)
             if data.get("type") == "chat":
                 message = self._create_message(
