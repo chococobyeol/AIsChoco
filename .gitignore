@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+
+# Models (큰 파일이므로 제외)
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# History and logs
+history/
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio files (샘플 제외)
+assets/voice_samples/*.wav
+assets/voice_samples/*.mp3
+!assets/voice_samples/.gitkeep
+
+# Temporary files
+tmp/
+temp/
+*.tmp

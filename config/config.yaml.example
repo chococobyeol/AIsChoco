@@ -1,0 +1,43 @@
+# AIsChoco 설정 파일
+
+# Groq API 설정
+groq:
+  model: "llama-3-70b-8192"
+  temperature: 0.7
+  max_tokens: 500
+  timeout: 5
+
+# 치지직 API 설정
+chzzk:
+  reconnect_delay: 5
+  max_reconnect_attempts: 10
+
+# TTS 설정
+tts:
+  model_size: "1.7B"  # 또는 "0.6B"
+  sample_rate: 16000
+  first_chunk_latency_target: 100  # ms
+
+# 히스토리 설정
+history:
+  max_recent_tokens: 4000
+  summary_threshold: 6000
+  summary_file: "history/summary.json"
+
+# VTS 설정
+vts:
+  host: "localhost"
+  port: 8001
+  update_rate: 30  # FPS
+
+# 포즈 제어 설정
+pose:
+  interpolation_time: 0.3  # 초
+  idle_animation: true
+
+# 로깅 설정
+logging:
+  level: "INFO"
+  file: "logs/aischoco.log"
+  max_size: "10MB"
+  backup_count: 5
