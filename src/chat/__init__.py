@@ -4,14 +4,14 @@
 """
 
 from .base_client import ChatClient, ChatMessage
-from .chzzk_client import ChzzkWebSocketClient
+from .chzzk_client import ChzzkSocketIOClient
 from .chat_parser import ChatParser, FilterConfig
 from .client_factory import ChatClientFactory
 
 __all__ = [
     "ChatClient",
     "ChatMessage",
-    "ChzzkWebSocketClient",
+    "ChzzkSocketIOClient",
     "ChatParser",
     "FilterConfig",
     "ChatClientFactory",

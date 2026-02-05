@@ -1,17 +1,24 @@
-# 치지직 WebSocket API 정보 수집 가이드
+# 치지직 API 정보 가이드
 
-치지직은 공식 WebSocket API 문서를 제공하지 않습니다. 다음 방법으로 정보를 수집해야 합니다.
+**✅ 공식 문서 발견!**: https://chzzk.gitbook.io/chzzk/chzzk-api/session
 
-## 1. 공식 개발자 문서 확인
+치지직은 **Socket.IO**를 사용하며, 공식 API 문서가 있습니다.
 
-### 치지직 개발자 센터
-- **URL**: https://developers.chzzk.naver.com/
-- **확인 항목**:
-  - API 인증 방법
-  - 기본 REST API 엔드포인트
-  - Rate Limiting 정책
+## 1. 공식 개발자 문서 ✅
 
-**⚠️ 주의**: WebSocket 관련 문서는 공개되어 있지 않을 수 있습니다.
+### 치지직 API 문서
+- **URL**: https://chzzk.gitbook.io/chzzk/chzzk-api/session
+- **주요 내용**:
+  - Socket.IO 기반 연결 (WebSocket 아님!)
+  - 세션 생성 API: `/open/v1/sessions/auth` 또는 `/open/v1/sessions/auth/client`
+  - 인증 방식: Access Token 또는 Client 인증
+  - 채팅 메시지 구조 명시
+
+### 핵심 정보
+1. **연결 방식**: Socket.IO (WebSocket 아님)
+2. **세션 생성**: 먼저 REST API로 세션 URL 획득 필요
+3. **인증**: Access Token 또는 Client ID/Secret
+4. **메시지 포맷**: JSON 구조 명확히 정의됨
 
 ## 2. 기존 오픈소스 프로젝트 분석
 
@@ -67,35 +74,65 @@ cd chzzk-tts
 
 ## 4. 실제 구현 시 확인 사항
 
-### WebSocket 엔드포인트
+### 세션 생성 API
 ```python
-# 예시 (실제 값은 DevTools에서 확인)
-ws_url = "wss://kr-ss1.chat.naver.com/chat"
-# 또는
-ws_url = "wss://chat.chzzk.naver.com/..."
+# 유저 인증 (Access Token)
+GET https://open-api.chzzk.naver.com/open/v1/sessions/auth
+Headers: Authorization: Bearer {access_token}
+
+# Client 인증
+GET https://open-api.chzzk.naver.com/open/v1/sessions/auth/client
+# Client 인증 헤더 필요 (문서 참고)
+
+# 응답
+{
+  "url": "https://ssio08.nchat.naver.com:443?auth=TOKEN"
+}
 ```
 
-### 인증 방식
-- 쿠키 기반 인증
-- 토큰 기반 인증
-- 세션 기반 인증
+### Socket.IO 연결
+```python
+import socketio
 
-### 메시지 포맷 예시
+sio = socketio.AsyncClient()
+await sio.connect(session_url, transports=['websocket'])
+
+# 이벤트 핸들러 등록
+sio.on("SYSTEM", on_system_message)  # 시스템 메시지
+sio.on("CHAT", on_chat_message)     # 채팅 메시지
+```
+
+### 채팅 메시지 포맷 (실제 API 구조)
 ```json
-// 구독 메시지
 {
-  "type": "subscribe",
-  "channelId": "YOUR_CHANNEL_ID"
+  "channelId": "채널ID",
+  "senderChannelId": "작성자 채널ID",
+  "profile": {
+    "nickname": "사용자명",
+    "badges": [],
+    "verifiedMark": false
+  },
+  "userRoleCode": "common_user",
+  "content": "채팅 내용",
+  "emojis": {
+    "key": "이모티콘ID",
+    "value": "이모티콘URL"
+  },
+  "messageTime": 1707216000000
 }
+```
 
-// 채팅 메시지 (수신)
-{
-  "type": "chat",
-  "user": "사용자명",
-  "message": "채팅 내용",
-  "timestamp": "2026-02-06T12:00:00Z",
-  "emoticons": []
+### 채널 구독 요청
+```python
+# 연결 완료 후 sessionKey 획득
+# SYSTEM 메시지의 "connected" 타입에서 sessionKey 추출
+
+subscribe_data = {
+    "sessionKey": "세션키",
+    "eventType": "CHAT",
+    "channelId": "채널ID"
 }
+sio.emit("subscribe", subscribe_data)
 ```
 
 ## 5. 커뮤니티 리소스

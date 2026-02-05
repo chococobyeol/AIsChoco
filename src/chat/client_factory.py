@@ -5,7 +5,7 @@
 
 from typing import Optional, Dict, Any
 from .base_client import ChatClient
-from .chzzk_client import ChzzkWebSocketClient
+from .chzzk_client import ChzzkSocketIOClient
 
 # TODO: 나중에 추가할 플랫폼들
 # from .youtube_client import YouTubeChatClient
@@ -16,7 +16,7 @@ class ChatClientFactory:
     """채팅 클라이언트 팩토리 클래스"""
     
     _platforms: Dict[str, type[ChatClient]] = {
-        "chzzk": ChzzkWebSocketClient,
+        "chzzk": ChzzkSocketIOClient,
         # TODO: 다른 플랫폼 추가
         # "youtube": YouTubeChatClient,
         # "twitch": TwitchChatClient,

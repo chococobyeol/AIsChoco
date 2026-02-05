@@ -2,8 +2,9 @@
 httpx>=0.25.0
 aiohttp>=3.9.0
 
-# WebSocket
-websockets>=12.0
+# Socket.IO (치지직 API는 Socket.IO 사용)
+python-socketio>=5.10.0
+aiohttp>=3.9.0  # Socket.IO의 async 클라이언트에 필요
 
 # VTube Studio API
 pyvts>=0.1.0

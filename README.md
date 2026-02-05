@@ -58,9 +58,22 @@ cp .env.example .env
 
 ## 🎮 사용법
 
+### 기본 실행
 ```bash
 python src/core/pipeline.py
 ```
+
+### WebSocket 클라이언트 테스트
+```bash
+# 예제 실행 (채널 ID와 토큰 설정 필요)
+python src/chat/example_usage.py
+```
+
+**⚠️ 중요**: 실제 사용 전에 다음을 설정해야 합니다:
+1. `.env` 파일에 API 키 설정
+2. `config/config.yaml` 파일 생성 및 설정
+3. 치지직 WebSocket 엔드포인트 및 인증 방식 확인
+   - `src/chat/chzzk_client.py`의 `ws_url` 및 인증 헤더 수정 필요
 
 ## 📁 프로젝트 구조
 

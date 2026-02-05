@@ -39,10 +39,12 @@ async def main():
     
     # 팩토리를 사용하여 클라이언트 생성 (플랫폼 변경이 쉬움)
     # TODO: 실제 채널 ID와 액세스 토큰으로 변경
+    # 참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session
     client = ChatClientFactory.create(
         platform="chzzk",  # "youtube", "twitch" 등으로 쉽게 변경 가능
         channel_id="YOUR_CHANNEL_ID",  # 실제 채널 ID로 변경
-        access_token="YOUR_ACCESS_TOKEN",  # 필요시 토큰 추가
+        access_token="YOUR_ACCESS_TOKEN",  # Access Token 필요
+        # 또는 client_id, client_secret 사용 (Client 인증)
         on_message=on_chat_message,
         reconnect_delay=5.0,
         max_reconnect_attempts=10

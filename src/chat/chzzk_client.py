@@ -1,6 +1,8 @@
 """
-치지직 WebSocket 클라이언트
+치지직 Socket.IO 클라이언트
 실시간 채팅 메시지를 수신합니다.
+
+참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session
 """
 
 import asyncio
@@ -9,16 +11,20 @@ import logging
 from typing import Optional, Callable
 from datetime import datetime
 
-import websockets
-from websockets.exceptions import ConnectionClosed, WebSocketException
+import socketio
+import httpx
 
 from .base_client import ChatClient, ChatMessage
 
 logger = logging.getLogger(__name__)
 
 
-class ChzzkWebSocketClient(ChatClient):
-    """치지직 WebSocket 클라이언트"""
+class ChzzkSocketIOClient(ChatClient):
+    """치지직 Socket.IO 클라이언트
+    
+    치지직은 WebSocket이 아닌 Socket.IO를 사용합니다.
+    먼저 세션 생성 API를 호출하여 연결 URL을 받아야 합니다.
+    """
     
     @property
     def platform_name(self) -> str:
@@ -28,6 +34,8 @@ class ChzzkWebSocketClient(ChatClient):
     def __init__(
         self,
         channel_id: str,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
         access_token: Optional[str] = None,
         on_message: Optional[Callable[[ChatMessage], None]] = None,
         reconnect_delay: float = 5.0,
@@ -36,99 +44,204 @@ class ChzzkWebSocketClient(ChatClient):
         """
         Args:
             channel_id: 치지직 채널 ID
-            access_token: API 액세스 토큰 (필요한 경우)
+            client_id: Client 인증용 Client ID (Client 인증 시 필요)
+            client_secret: Client 인증용 Client Secret (Client 인증 시 필요)
+            access_token: Access Token (유저 인증 시 필요)
             on_message: 메시지 수신 시 호출할 콜백 함수
             reconnect_delay: 재연결 지연 시간 (초)
             max_reconnect_attempts: 최대 재연결 시도 횟수
+            
+        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session
         """
         super().__init__(channel_id, on_message, reconnect_delay, max_reconnect_attempts)
+        self.client_id = client_id
+        self.client_secret = client_secret
         self.access_token = access_token
         
-        # WebSocket 연결
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        # Socket.IO 클라이언트
+        self.sio: Optional[socketio.AsyncClient] = None
+        self.session_url: Optional[str] = None
+        self.session_key: Optional[str] = None
         
-        # WebSocket 엔드포인트 (실제 API 문서 확인 후 수정 필요)
-        # TODO: 실제 치지직 WebSocket 엔드포인트로 변경
-        # 확인 방법: docs/CHZZK_API_RESEARCH.md 참고
-        # 1. 브라우저 DevTools에서 WebSocket 연결 확인
-        # 2. 기존 오픈소스 프로젝트 분석 (chzzk-tts 등)
-        self.ws_url = f"wss://kr-ss1.chat.naver.com/chat"  # 예시 URL (수정 필요)
+        # API 엔드포인트
+        self.api_base_url = "https://open-api.chzzk.naver.com"
         
-    async def connect(self):
-        """WebSocket 연결"""
-        try:
-            # TODO: 실제 인증 헤더 추가 필요
-            headers = {}
+    async def _get_session_url(self) -> str:
+        """
+        세션 생성 API를 호출하여 Socket.IO 연결 URL 획득
+        
+        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session
+        """
+        async with httpx.AsyncClient() as client:
             if self.access_token:
-                headers["Authorization"] = f"Bearer {self.access_token}"
+                # 유저 인증: Access Token 사용
+                # GET /open/v1/sessions/auth
+                headers = {"Authorization": f"Bearer {self.access_token}"}
+                response = await client.get(
+                    f"{self.api_base_url}/open/v1/sessions/auth",
+                    headers=headers
+                )
+            elif self.client_id and self.client_secret:
+                # Client 인증: Client ID/Secret 사용
+                # GET /open/v1/sessions/auth/client
+                # TODO: Client 인증 구현 (https://chzzk.gitbook.io/chzzk/chzzk-api/tips#client-api 참고)
+                raise NotImplementedError("Client 인증은 아직 구현되지 않았습니다")
+            else:
+                raise ValueError("access_token 또는 (client_id, client_secret)이 필요합니다")
             
-            logger.info(f"[{self.platform_name}] WebSocket 연결 시도: {self.ws_url}")
-            self.websocket = await websockets.connect(
-                self.ws_url,
-                extra_headers=headers
+            response.raise_for_status()
+            data = response.json()
+            return data["url"]
+    
+    async def connect(self):
+        """Socket.IO 연결"""
+        try:
+            # 1. 세션 생성 API 호출하여 연결 URL 획득
+            self.session_url = await self._get_session_url()
+            logger.info(f"[{self.platform_name}] 세션 URL 획득 성공")
+            
+            # 2. Socket.IO 클라이언트 생성 및 연결
+            self.sio = socketio.AsyncClient(
+                reconnection=False,  # 수동 재연결 관리
+                logger=False,
+                engineio_logger=False
             )
+            
+            # 이벤트 핸들러 등록
+            self.sio.on("connect", self._on_connect)
+            self.sio.on("SYSTEM", self._on_system_message)
+            self.sio.on("disconnect", self._on_disconnect)
+            
+            # Socket.IO 연결
+            logger.info(f"[{self.platform_name}] Socket.IO 연결 시도")
+            await self.sio.connect(
+                self.session_url,
+                transports=['websocket'],
+                wait_timeout=3
+            )
+            
             self.is_connected = True
             self.reconnect_attempts = 0
-            logger.info(f"[{self.platform_name}] WebSocket 연결 성공")
-            
-            # 채널 구독 메시지 전송 (실제 포맷 확인 필요)
-            await self._subscribe_channel()
+            logger.info(f"[{self.platform_name}] Socket.IO 연결 성공")
             
         except Exception as e:
-            logger.error(f"WebSocket 연결 실패: {e}")
+            logger.error(f"[{self.platform_name}] 연결 실패: {e}")
             self.is_connected = False
             raise
     
+    def _on_connect(self):
+        """Socket.IO 연결 완료 시 호출"""
+        logger.info(f"[{self.platform_name}] Socket.IO 연결 완료")
+    
+    def _on_disconnect(self):
+        """Socket.IO 연결 종료 시 호출"""
+        logger.warning(f"[{self.platform_name}] Socket.IO 연결 종료")
+        self.is_connected = False
+    
+    async def _on_system_message(self, data):
+        """
+        시스템 메시지 수신 핸들러
+        연결 완료 메시지에서 sessionKey를 추출하고 채널 구독
+        
+        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session#undefined-11
+        """
+        try:
+            msg_type = data.get("type")
+            
+            if msg_type == "connected":
+                # 연결 완료 메시지: sessionKey 저장 및 채널 구독
+                self.session_key = data.get("data", {}).get("sessionKey")
+                logger.info(f"[{self.platform_name}] 세션 키 획득: {self.session_key}")
+                
+                # 채널 구독 요청
+                await self._subscribe_channel()
+                
+            elif msg_type == "subscribed":
+                # 구독 완료 메시지
+                event_type = data.get("data", {}).get("eventType")
+                channel_id = data.get("data", {}).get("channelId")
+                logger.info(f"[{self.platform_name}] 채널 구독 완료: {event_type} - {channel_id}")
+                
+            elif msg_type == "unsubscribed":
+                # 구독 취소 메시지
+                logger.warning(f"[{self.platform_name}] 채널 구독 취소됨")
+                
+            elif msg_type == "revoked":
+                # 권한 취소 메시지
+                logger.error(f"[{self.platform_name}] 이벤트 권한 취소됨")
+                
+        except Exception as e:
+            logger.error(f"[{self.platform_name}] 시스템 메시지 처리 오류: {e}")
+    
     async def _subscribe_channel(self):
-        """채널 구독 메시지 전송"""
-        # TODO: 실제 치지직 구독 메시지 포맷 확인 후 수정
-        # 확인 방법: docs/CHZZK_API_RESEARCH.md 참고
-        # 브라우저 DevTools에서 실제 구독 메시지 확인
-        subscribe_message = {
-            "type": "subscribe",
+        """
+        채널 구독 요청
+        
+        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session#undefined-2
+        """
+        if not self.session_key:
+            logger.error("[{self.platform_name}] 세션 키가 없어 구독할 수 없습니다")
+            return
+        
+        # 채팅 이벤트 구독 요청
+        subscribe_data = {
+            "sessionKey": self.session_key,
+            "eventType": "CHAT",
             "channelId": self.channel_id
         }
-        await self.websocket.send(json.dumps(subscribe_message))
-        logger.info(f"채널 구독 요청: {self.channel_id}")
+        
+        await self.sio.emit("subscribe", subscribe_data)
+        logger.info(f"[{self.platform_name}] 채널 구독 요청: {self.channel_id}")
+        
+        # 채팅 메시지 이벤트 핸들러 등록
+        self.sio.on("CHAT", self._on_chat_message)
+    
+    async def _on_chat_message(self, data):
+        """
+        채팅 메시지 수신 핸들러
+        
+        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session#message-event-subscribe-chat
+        """
+        try:
+            # 실제 API 구조에 맞게 파싱
+            profile = data.get("profile", {})
+            nickname = profile.get("nickname", "")
+            content = data.get("content", "")
+            message_time = data.get("messageTime", 0)  # Int64 (ms)
+            
+            # emojis는 Map 형식: {key: emoji_id, value: emoji_url}
+            emojis_map = data.get("emojis", {})
+            emoticons = list(emojis_map.keys()) if emojis_map else []
+            
+            # timestamp 변환 (ms → datetime)
+            timestamp = datetime.fromtimestamp(message_time / 1000) if message_time else datetime.now()
+            
+            # ChatMessage 생성
+            message = self._create_message(
+                user=nickname,
+                message=content,
+                timestamp=timestamp,
+                emoticons=emoticons,
+                message_id=None,  # API에 messageId 필드 없음
+                user_id=data.get("senderChannelId"),
+                user_badge=str(data.get("userRoleCode", ""))
+            )
+            
+            if self.on_message:
+                await self.on_message(message)
+                
+        except Exception as e:
+            logger.error(f"[{self.platform_name}] 채팅 메시지 처리 오류: {e}, 데이터: {data}")
     
     async def disconnect(self):
-        """WebSocket 연결 종료"""
-        if self.websocket:
-            await self.websocket.close()
+        """Socket.IO 연결 종료"""
+        if self.sio:
+            await self.sio.disconnect()
             self.is_connected = False
-            logger.info(f"[{self.platform_name}] WebSocket 연결 종료")
-    
-    async def _handle_message(self, raw_message: str):
-        """수신한 메시지 처리"""
-        try:
-            data = json.loads(raw_message)
-            
-            # TODO: 실제 메시지 구조에 맞게 파싱 로직 수정
-            # 확인 방법: docs/CHZZK_API_RESEARCH.md 참고
-            # 브라우저 DevTools에서 실제 메시지 포맷 확인
-            # 예시 구조 (실제 구조 확인 필요)
-            if data.get("type") == "chat":
-                message = self._create_message(
-                    user=data.get("user", ""),
-                    message=data.get("message", ""),
-                    timestamp=datetime.fromisoformat(
-                        data.get("timestamp", datetime.now().isoformat())
-                    ),
-                    emoticons=data.get("emoticons", []),
-                    message_id=data.get("messageId"),
-                    user_id=data.get("userId")
-                )
-                
-                if self.on_message:
-                    await self.on_message(message)
-                    
-        except json.JSONDecodeError as e:
-            logger.error(f"메시지 JSON 파싱 실패: {e}, 원본: {raw_message}")
-        except Exception as e:
-            logger.error(f"메시지 처리 중 오류: {e}")
+            logger.info(f"[{self.platform_name}] Socket.IO 연결 종료")
     
     async def listen(self):
-        """메시지 수신 루프"""
+        """메시지 수신 루프 (Socket.IO는 이벤트 기반이므로 대기만 함)"""
         self._running = True
         
         while self._running:
@@ -138,31 +251,12 @@ class ChzzkWebSocketClient(ChatClient):
                         break
                     continue
                 
-                # 메시지 수신 (타임아웃 설정)
-                raw_message = await asyncio.wait_for(
-                    self.websocket.recv(),
-                    timeout=30.0
-                )
-                
-                await self._handle_message(raw_message)
-                
-            except asyncio.TimeoutError:
-                # 타임아웃 시 핑 메시지 전송 (연결 유지)
-                try:
-                    await self.websocket.ping()
-                except:
-                    self.is_connected = False
-                    logger.warning("연결 타임아웃, 재연결 시도")
-                    
-            except ConnectionClosed:
-                logger.warning("WebSocket 연결 종료됨")
-                self.is_connected = False
-                
-            except WebSocketException as e:
-                logger.error(f"WebSocket 오류: {e}")
-                self.is_connected = False
+                # Socket.IO는 이벤트 기반이므로 연결 유지만 하면 됨
+                # 메시지는 _on_chat_message 핸들러에서 자동 처리됨
+                await asyncio.sleep(1)
                 
             except Exception as e:
-                logger.error(f"예상치 못한 오류: {e}")
+                logger.error(f"[{self.platform_name}] 예상치 못한 오류: {e}")
                 self.is_connected = False
+                await asyncio.sleep(1)
     
