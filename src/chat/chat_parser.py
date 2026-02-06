@@ -6,8 +6,9 @@ import re
 import logging
 from typing import Optional
 from dataclasses import dataclass
+from datetime import datetime
 
-from .chzzk_client import ChatMessage
+from .base_client import ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -45,25 +46,37 @@ class ChatParser:
             re.compile(r'https?://\S+'),  # URL (필요시 제외 가능)
         ]
     
-    def parse(self, raw_message: dict) -> Optional[ChatMessage]:
+    def parse(self, raw_message: dict, platform: str = "chzzk") -> Optional[ChatMessage]:
         """
         원시 메시지를 ChatMessage로 파싱
-        
+
         Args:
             raw_message: WebSocket에서 수신한 원시 메시지 딕셔너리
-            
+            platform: 플랫폼 이름 (기본: chzzk)
+
         Returns:
             파싱된 ChatMessage 또는 None (파싱 실패 시)
         """
         try:
             # TODO: 실제 치지직 메시지 구조에 맞게 수정
+            ts = raw_message.get("timestamp")
+            if ts is None:
+                ts = datetime.now()
+            elif not isinstance(ts, datetime):
+                # ms 또는 초 단위 숫자면 datetime으로 변환
+                try:
+                    n = float(ts)
+                    ts = datetime.fromtimestamp(n / 1000 if n > 1e12 else n)
+                except (TypeError, OSError):
+                    ts = datetime.now()
             message = ChatMessage(
                 user=raw_message.get("user", ""),
                 message=raw_message.get("message", ""),
-                timestamp=raw_message.get("timestamp"),
+                timestamp=ts,
                 emoticons=raw_message.get("emoticons", []),
                 channel_id=raw_message.get("channelId", ""),
-                message_id=raw_message.get("messageId")
+                platform=platform,
+                message_id=raw_message.get("messageId"),
             )
             
             return message
@@ -111,17 +124,18 @@ class ChatParser:
         
         return True
     
-    def parse_and_filter(self, raw_message: dict) -> Optional[ChatMessage]:
+    def parse_and_filter(self, raw_message: dict, platform: str = "chzzk") -> Optional[ChatMessage]:
         """
         메시지 파싱 및 필터링을 한 번에 수행
-        
+
         Args:
             raw_message: WebSocket에서 수신한 원시 메시지 딕셔너리
-            
+            platform: 플랫폼 이름 (기본: chzzk)
+
         Returns:
             파싱되고 필터링된 ChatMessage 또는 None
         """
-        message = self.parse(raw_message)
+        message = self.parse(raw_message, platform=platform)
         if message and self.filter(message):
             return message
         return None
