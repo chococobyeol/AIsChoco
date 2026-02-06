@@ -50,7 +50,7 @@ class YouTubeChatClient(ChatClient):
 from .youtube_client import YouTubeChatClient
 
 _platforms = {
-    "chzzk": ChzzkWebSocketClient,
+    "chzzk": ChzzkSocketIOClient,
     "youtube": YouTubeChatClient,  # 추가
 }
 ```

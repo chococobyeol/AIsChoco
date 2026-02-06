@@ -15,7 +15,7 @@
 치지직 라이브 방송의 채팅을 실시간 분석하여, 고속 LLM(Groq)이 답변과 감정을 생성하고, 로컬 구동 TTS(Qwen3-TTS)와 캐릭터 제어 API(VTube Studio)를 통해 반응하는 지능형 버튜버 시스템을 구축합니다.
 
 ### 1.2 프로젝트 범위
-- 치지직 WebSocket API를 통한 실시간 채팅 수집
+- 치지직 Socket.IO API를 통한 실시간 채팅 수집
 - Groq API를 활용한 고속 텍스트 생성 및 감정 분석
 - 로컬 Qwen3-TTS 모델을 통한 저지연 음성 합성
 - VTube Studio API를 통한 실시간 캐릭터 제어
@@ -31,7 +31,7 @@
 ## 2. 핵심 기능 (Core Features)
 
 ### 2.1 실시간 채팅 수집 및 분석
-- **기능**: 치지직 WebSocket API를 통해 지연 없는 채팅 데이터 수집
+- **기능**: 치지직 Socket.IO API를 통해 지연 없는 채팅 데이터 수집
 - **요구사항**:
   - 채팅 메시지 실시간 수신 (지연 < 100ms)
   - 사용자명, 메시지 내용, 이모티콘 파싱
@@ -79,7 +79,7 @@
 | --- | --- | --- | --- |
 | **언어** | Python | 3.10+ | 시스템 통합 및 비동기 처리 |
 | **프레임워크** | asyncio | - | 비동기 이벤트 처리 |
-| **웹소켓** | websockets | latest | 치지직 API 통신 |
+| **Socket.IO** | python-socketio | 4.x | 치지직 API 통신 (공식: Socket.IO 2.0.3 호환) |
 | **HTTP 클라이언트** | httpx / aiohttp | latest | Groq API 통신 |
 
 ### 3.2 AI/ML 스택
@@ -209,8 +209,8 @@
 
 **⚠️ 중요**: 아래 내용은 예상 구조이며, 실제 치지직 공식 API 문서 확인 후 수정 필요
 
-#### 4.4.1 WebSocket 연결
-- **연결 방식**: WebSocket 프로토콜 (실제 엔드포인트는 공식 문서 확인 필요)
+#### 4.4.1 Socket.IO 연결
+- **연결 방식**: Socket.IO 프로토콜 (세션 URL은 REST API `/open/v1/sessions/auth` 등으로 획득, 공식 문서 참고)
 - **인증**: OAuth 2.0 또는 API 토큰 (실제 인증 방식 확인 필요)
 - **재연결 로직**: 연결 끊김 시 자동 재연결 (지수 백오프)
 - **에러 핸들링**: 네트워크 오류 처리 및 로깅
@@ -220,7 +220,7 @@
 - **⚠️ 주의**: 아래 데이터 구조는 예시이며, 실제 API 응답 구조와 다를 수 있음
 - **실제 구현 전 필수 확인 사항**:
   1. 치지직 공식 API 문서에서 채팅 메시지 데이터 구조 확인
-  2. 실제 WebSocket 메시지 포맷 및 필드명 검증
+  2. 실제 Socket.IO 메시지 포맷 및 필드명 검증
   3. 인증 토큰 발급 및 사용 방법 확인
   4. Rate Limiting 정책 확인
 - **예상 데이터 구조** (실제 구조로 수정 필요):
@@ -407,7 +407,7 @@
 
 ### 5.1 전체 구조도
 ```
-[치지직 WebSocket] 
+[치지직 Socket.IO] 
     ↓
 [채팅 수집 모듈] → [채팅 필터링] → [채팅 큐]
     ↓
@@ -431,7 +431,7 @@
 aischoco/
 ├── src/
 │   ├── chat/
-│   │   ├── chzzk_client.py      # 치지직 WebSocket 클라이언트
+│   │   ├── chzzk_client.py      # 치지직 Socket.IO 클라이언트
 │   │   ├── chat_parser.py        # 채팅 파싱 및 필터링
 │   │   ├── chat_queue.py         # 채팅 큐 관리
 │   │   └── chat_history.py       # 채팅 히스토리 관리 (슬라이딩 윈도우 + 요약)
@@ -471,7 +471,7 @@ aischoco/
 ```
 
 ### 5.3 데이터 흐름
-1. **채팅 수집**: 치지직 WebSocket → 채팅 파서 → 채팅 큐 → 채팅 히스토리 저장
+1. **채팅 수집**: 치지직 Socket.IO → 채팅 파서 → 채팅 큐 → 채팅 히스토리 저장
 2. **AI 처리**: 
    - 채팅 큐에서 새 메시지 추출
    - 채팅 히스토리에 user 메시지 추가
@@ -607,7 +607,7 @@ class CharacterParameters:
 ### 7.3 치지직 API
 - **⚠️ 중요**: 실제 API 스펙은 공식 문서 확인 필수
 - **공식 문서**: [치지직 개발자 문서](https://developers.chzzk.naver.com/)
-- **WebSocket**: 치지직 공식 WebSocket 엔드포인트 (실제 URL 확인 필요)
+- **Socket.IO**: 치지직은 Socket.IO 사용 (세션 URL은 REST API로 획득, [chzzk API 문서](https://chzzk.gitbook.io/chzzk/chzzk-api/session) 참고)
 - **인증**: OAuth 2.0 또는 API 토큰 (실제 인증 방식 확인 필요)
 - **이벤트 타입**: 채팅 메시지, 구독, 후원 등 (실제 지원 이벤트 확인 필요)
 - **구현 전 체크리스트**:
@@ -731,7 +731,7 @@ class CharacterParameters:
 
 ### Phase 1: 기반 구축 (2주)
 - 프로젝트 구조 설정
-- 치지직 WebSocket 클라이언트 개발
+- 치지직 Socket.IO 클라이언트 개발
 - 기본 설정 시스템 구축
 
 ### Phase 2: AI 연동 (2주)
@@ -853,7 +853,8 @@ class CharacterParameters:
 
 ### 16.2 관련 라이브러리
 - pyvts: VTube Studio Python 라이브러리
-- websockets: Python WebSocket 라이브러리
+- python-socketio: 치지직 Socket.IO 클라이언트 (치지직 API 통신)
+- websockets: Python WebSocket 라이브러리 (VTube Studio 등)
 - torch: PyTorch (TTS 모델용)
 
 ---

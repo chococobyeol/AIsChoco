@@ -9,6 +9,9 @@ aiohttp>=3.9.0
 # Env vars
 python-dotenv>=1.0.0
 
+# Groq API (OpenAI-compatible)
+openai>=1.0.0
+
 # --- Unused for now; add when implementing TTS / VTube Studio / AI
 # pyvts>=0.1.0
 # torch>=2.0.0
