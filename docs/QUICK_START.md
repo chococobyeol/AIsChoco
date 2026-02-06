@@ -2,6 +2,20 @@
 
 치지직 AI 버튜버 시스템을 처음 사용하는 분을 위한 단계별 가이드입니다.
 
+## 0. 설치 (실행 순서)
+
+1. 저장소 클론 후 가상환경 생성 및 활성화
+2. **GPU 사용 시**: PyTorch CUDA 먼저 설치 후 의존성 설치
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+   pip install -r requirements.txt
+   ```
+3. **CPU만 사용 시**: 의존성만 설치
+   ```bash
+   pip install -r requirements.txt
+   ```
+   (CUDA 버전은 [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/)에서 확인)
+
 ## 1. 치지직 애플리케이션 등록
 
 ### 1.1 개발자 센터 접속

@@ -34,9 +34,16 @@ venv\Scripts\activate  # Windows
 ```
 
 3. 의존성 설치
-```bash
-pip install -r requirements.txt
-```
+   - **GPU 사용 시 (TTS 등)**: PyTorch CUDA를 먼저 설치한 뒤 나머지 의존성 설치
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+   pip install -r requirements.txt
+   ```
+   - **CPU만 사용 시**: 아래만 실행
+   ```bash
+   pip install -r requirements.txt
+   ```
+   CUDA 버전(cu118/cu126/cu128)은 [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/)에서 본인 환경에 맞게 선택.
 
 4. 치지직 애플리케이션 등록 및 인증 설정
    - [치지직 개발자 센터](https://developers.chzzk.naver.com/) 접속
