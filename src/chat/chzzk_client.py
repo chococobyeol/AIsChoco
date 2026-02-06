@@ -63,8 +63,8 @@ class ChzzkSocketIOClient(ChatClient):
         self.session_url: Optional[str] = None
         self.session_key: Optional[str] = None
         
-        # API 엔드포인트
-        self.api_base_url = "https://open-api.chzzk.naver.com"
+        # Open API 도메인 (참고사항: openapi.chzzk.naver.com, 하이픈 없음)
+        self.api_base_url = "https://openapi.chzzk.naver.com"
         
     async def _get_session_url(self) -> str:
         """
@@ -91,7 +91,9 @@ class ChzzkSocketIOClient(ChatClient):
             
             response.raise_for_status()
             data = response.json()
-            return data["url"]
+            # 공통 응답: {"code": 200, "content": { "url": "..." }}
+            body = data.get("content") if data.get("content") is not None else data
+            return body["url"]
     
     async def connect(self):
         """Socket.IO 연결"""
@@ -116,8 +118,7 @@ class ChzzkSocketIOClient(ChatClient):
             logger.info(f"[{self.platform_name}] Socket.IO 연결 시도")
             await self.sio.connect(
                 self.session_url,
-                transports=['websocket'],
-                wait_timeout=3
+                transports=['websocket']
             )
             
             self.is_connected = True
@@ -142,10 +143,17 @@ class ChzzkSocketIOClient(ChatClient):
         """
         시스템 메시지 수신 핸들러
         연결 완료 메시지에서 sessionKey를 추출하고 채널 구독
-        
-        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session#undefined-11
+        문서: Event Type SYSTEM, Message Body { type, data }
         """
         try:
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.debug(f"[{self.platform_name}] SYSTEM payload (non-JSON string): {data[:100]}")
+                    return
+            if not isinstance(data, dict):
+                return
             msg_type = data.get("type")
             
             if msg_type == "connected":
@@ -175,35 +183,42 @@ class ChzzkSocketIOClient(ChatClient):
     
     async def _subscribe_channel(self):
         """
-        채널 구독 요청
-        
-        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session#undefined-2
+        채널 구독 요청 (문서: POST /open/v1/sessions/events/subscribe/chat, Request Param sessionKey)
         """
         if not self.session_key:
-            logger.error("[{self.platform_name}] 세션 키가 없어 구독할 수 없습니다")
+            logger.error(f"[{self.platform_name}] 세션 키가 없어 구독할 수 없습니다")
             return
-        
-        # 채팅 이벤트 구독 요청
-        subscribe_data = {
-            "sessionKey": self.session_key,
-            "eventType": "CHAT",
-            "channelId": self.channel_id
-        }
-        
-        await self.sio.emit("subscribe", subscribe_data)
-        logger.info(f"[{self.platform_name}] 채널 구독 요청: {self.channel_id}")
-        
-        # 채팅 메시지 이벤트 핸들러 등록
+        if not self.access_token:
+            logger.error(f"[{self.platform_name}] 구독 API 호출에 Access Token이 필요합니다")
+            return
+
+        # 문서: POST /open/v1/sessions/events/subscribe/chat, Request Param sessionKey
+        url = f"{self.api_base_url}/open/v1/sessions/events/subscribe/chat"
+        headers = {"Authorization": f"Bearer {self.access_token}", "Content-Type": "application/json"}
+        params = {"sessionKey": self.session_key, "channelId": self.channel_id}
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, params=params, headers=headers)
+            response.raise_for_status()
+        logger.info(f"[{self.platform_name}] 채널 구독 요청 완료: {self.channel_id}")
+
+        # 채팅 메시지 이벤트 핸들러 등록 (소켓으로 CHAT 이벤트 수신)
         self.sio.on("CHAT", self._on_chat_message)
     
     async def _on_chat_message(self, data):
         """
         채팅 메시지 수신 핸들러
-        
-        참고: https://chzzk.gitbook.io/chzzk/chzzk-api/session#message-event-subscribe-chat
+        문서: Event Type CHAT, Message Body (channelId, profile, content, messageTime 등)
         """
         try:
-            # 실제 API 구조에 맞게 파싱
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.debug(f"[{self.platform_name}] CHAT payload (non-JSON string): {data[:100]}")
+                    return
+            if not isinstance(data, dict):
+                return
             profile = data.get("profile", {})
             nickname = profile.get("nickname", "")
             content = data.get("content", "")

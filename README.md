@@ -38,17 +38,28 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
-4. 환경 변수 설정
+4. 치지직 애플리케이션 등록 및 인증 설정
+   - [치지직 개발자 센터](https://developers.chzzk.naver.com/) 접속
+   - 애플리케이션 등록 (자세한 방법은 [docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md) 참고)
+   - Client ID와 Client Secret 발급
+   - 로그인 리디렉션 URL 등록 (예: `http://localhost:8080/callback`)
+
+5. 환경 변수 설정
 ```bash
 cp .env.example .env
-# .env 파일을 열어 API 키 등을 설정
+# .env 파일을 열어 발급받은 정보 입력
+# - CHZZK_CLIENT_ID: 치지직 Client ID
+# - CHZZK_CLIENT_SECRET: 치지직 Client Secret
+# - CHZZK_REDIRECT_URI: 등록한 리디렉션 URL
+# - CHZZK_CHANNEL_ID: 라이브 방송 채널 ID
+# - GROQ_API_KEY: Groq API 키
 ```
 
-5. Qwen3-TTS 모델 다운로드
+6. Qwen3-TTS 모델 다운로드
 - Hugging Face 또는 공식 저장소에서 모델 다운로드
 - `models/qwen3-tts/` 디렉토리에 저장
 
-6. VB-Cable 설치 및 설정
+7. VB-Cable 설치 및 설정
 - VB-Cable 다운로드 및 설치
 - VTube Studio의 오디오 입력을 VB-Cable로 설정
 
@@ -63,17 +74,23 @@ cp .env.example .env
 python src/core/pipeline.py
 ```
 
-### WebSocket 클라이언트 테스트
+### 치지직 예제 실행 (가상환경 활성화 후, 프로젝트 루트에서)
 ```bash
-# 예제 실행 (채널 ID와 토큰 설정 필요)
-python src/chat/example_usage.py
+# 1) Access Token 발급 (한 번만)
+python examples/chzzk_auth_example.py
+
+# 2) .env에 CHZZK_ACCESS_TOKEN 추가 후 채팅 수신 테스트
+python examples/chzzk_chat_example.py
 ```
 
 **⚠️ 중요**: 실제 사용 전에 다음을 설정해야 합니다:
-1. `.env` 파일에 API 키 설정
-2. `config/config.yaml` 파일 생성 및 설정
-3. 치지직 WebSocket 엔드포인트 및 인증 방식 확인
-   - `src/chat/chzzk_client.py`의 `ws_url` 및 인증 헤더 수정 필요
+1. 가상환경 활성화 후 `pip install -r requirements.txt`
+2. 치지직 개발자 센터에서 애플리케이션 등록 및 Client ID/Secret 발급
+3. `.env` 파일에 발급받은 정보 및 API 키 설정
+4. Access Token 발급 (`python examples/chzzk_auth_example.py`) 후 `.env`에 `CHZZK_ACCESS_TOKEN` 추가
+5. 치지직 채널 ID 확인 및 `.env`에 `CHZZK_CHANNEL_ID` 설정
+
+자세한 설정 방법은 [docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md)를 참고하세요.
 
 ## 📁 프로젝트 구조
 
@@ -94,7 +111,9 @@ aischoco/
 
 ## 📚 문서
 
+- [docs/QUICK_START.md](docs/QUICK_START.md) - **빠른 시작 가이드** (처음 사용하는 분 추천)
 - [PRD.md](PRD.md) - 상세한 제품 요구사항 문서
+- [docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md) - 치지직 API 사용 가이드 (애플리케이션 등록, Access Token 발급 등)
 
 ## 🔗 참고 자료
 

@@ -7,12 +7,160 @@
 ## 1. 공식 개발자 문서 ✅
 
 ### 치지직 API 문서
-- **URL**: https://chzzk.gitbook.io/chzzk/chzzk-api/session
+- **세션 문서**: https://chzzk.gitbook.io/chzzk/chzzk-api/session
+- **인증 문서**: https://chzzk.gitbook.io/chzzk/chzzk-api/authorization
 - **주요 내용**:
   - Socket.IO 기반 연결 (WebSocket 아님!)
   - 세션 생성 API: `/open/v1/sessions/auth` 또는 `/open/v1/sessions/auth/client`
   - 인증 방식: Access Token 또는 Client 인증
   - 채팅 메시지 구조 명시
+
+### Access Token 발급 절차
+
+치지직 API를 사용하려면 먼저 **Access Token**을 발급받아야 합니다.
+
+#### 1단계: 애플리케이션 등록
+
+[치지직 개발자 센터](https://developers.chzzk.naver.com/)에서 애플리케이션을 등록하여 `clientId`와 `clientSecret`을 발급받습니다.
+
+##### 1.1 개발자 센터 접속
+1. [치지직 개발자 센터](https://developers.chzzk.naver.com/) 접속
+2. 로그인 (네이버 계정 필요)
+3. 상단 메뉴에서 **"Application"** 클릭
+4. **"애플리케이션 등록"** 버튼 클릭
+
+##### 1.2 애플리케이션 정보 입력
+
+**애플리케이션 ID** (필수):
+- **규칙**:
+  - 영문 대소문자, 숫자, 하이픈(`-`), 언더스코어(`_`)만 사용 가능
+  - 최대 50자까지 입력 가능
+  - 기존 클라이언트와 중복 불가
+  - `naver`, `chzzk` 등 공식 서비스명 포함 불가
+- **예시**: `aischoco-vtuber`, `my-chat-bot`, `test_app_001`
+- **중복 확인**: 입력 후 "중복 확인" 버튼으로 사용 가능 여부 확인
+
+**애플리케이션 이름** (필수):
+- **규칙**:
+  - 한글, 영문 대소문자, 숫자, 띄어쓰기만 사용 가능
+  - 최대 50자까지 입력 가능
+  - 기존 클라이언트와 중복 불가
+  - `naver`, `네이버`, `chzzk`, `치지직` 등 공식 서비스명 포함 불가
+- **예시**: `AI 버튜버`, `Chat Bot`, `My Application`
+- **중복 확인**: 입력 후 "중복 확인" 버튼으로 사용 가능 여부 확인
+
+**로그인 리디렉션 URL** (필수):
+- OAuth 2.0 인증 후 사용자를 리다이렉트할 URL
+- **로컬 개발 환경 예시**: `http://localhost:8080/callback`
+- **프로덕션 환경 예시**: `https://yourdomain.com/callback`
+- ⚠️ **중요**: 이 URL은 나중에 인증 코드 요청 시 사용하는 `redirectUri`와 **정확히 일치**해야 합니다
+- 여러 URL 등록 가능 여부는 개발자 센터에서 확인 필요
+
+**API Scopes** (필수):
+- "선택" 버튼을 클릭하여 필요한 권한 선택
+- **채팅 메시지 수신에 필요한 스코프**:
+  - `채팅 메시지 조회` (또는 유사한 이름)
+- **후원/구독 이벤트 수신에 필요한 스코프**:
+  - `후원 조회`
+  - `구독 조회`
+- ⚠️ **주의**: 스코프 이름은 실제 개발자 센터에서 확인하세요
+
+##### 1.3 등록 완료
+1. 모든 필수 항목 입력 후 **"등록"** 버튼 클릭
+2. 등록 완료 시 **Client ID**와 **Client Secret** 발급
+3. ⚠️ **중요**: Client Secret은 **한 번만 표시**되므로 반드시 안전하게 저장하세요
+
+##### 1.4 발급받은 정보 저장
+```python
+# .env 파일 또는 config.yaml에 저장
+CHZZK_CLIENT_ID=your-client-id-here
+CHZZK_CLIENT_SECRET=your-client-secret-here
+CHZZK_REDIRECT_URI=http://localhost:8080/callback
+```
+
+**⚠️ 보안 주의사항**:
+- Client Secret은 절대 공개 저장소(GitHub 등)에 업로드하지 마세요
+- `.env` 파일은 `.gitignore`에 추가되어 있는지 확인하세요
+- 프로덕션 환경에서는 환경 변수나 보안 저장소 사용을 권장합니다
+
+#### 2단계: 인증 코드 요청
+```
+GET https://chzzk.naver.com/account-interlock
+```
+
+**파라미터**:
+- `clientId`: 애플리케이션 Client ID
+- `redirectUri`: 등록한 리디렉션 URL (반드시 등록한 URL과 일치해야 함)
+- `state`: CSRF 방지를 위한 랜덤 문자열
+
+**예시**:
+```
+https://chzzk.naver.com/account-interlock?
+  clientId=fefb6bbb-00c2-497c-afc2-XXXXXXXXXXXX&
+  redirectUri=http://localhost:8080/callback&
+  state=zxclDasdfA25
+```
+
+사용자가 로그인하면 `redirectUri`로 리다이렉트되며 `code`와 `state`가 전달됩니다:
+```
+http://localhost:8080/callback?code=ygKEQQk3p0DjUsBjJradJmXXXXXXXX&state=zxclDasdfA25
+```
+
+#### 3단계: Access Token 발급
+```
+POST https://openapi.chzzk.naver.com/auth/v1/token
+```
+
+**Request Body**:
+```json
+{
+  "grantType": "authorization_code",
+  "clientId": "fefb6bbb-00c2-497c-afc2-XXXXXXXXXXXX",
+  "clientSecret": "VeIMuc9XGle7PSxIVYNwPpI2OEk_9gXoW_XXXXXXXXX",
+  "code": "ygKEQQk3p0DjUsBjJradJmXXXXXXXX",
+  "state": "zxclDasdfA25"
+}
+```
+
+**Response**:
+```json
+{
+  "accessToken": "FFok65zQFQVcFvH2eJ7SS7SBFlTXt0EZ10L5XXXXXXXX",
+  "refreshToken": "NWG05CKHAsz4k4d3PB0wQUV9ugGlp0YuibQ4XXXXXXXX",
+  "tokenType": "Bearer",
+  "expiresIn": "86400"
+}
+```
+
+- **Access Token**: 1일 만료 (86400초)
+- **Refresh Token**: 30일 만료
+- **tokenType**: 항상 `Bearer`
+
+#### 4단계: Access Token 갱신 (만료 시)
+```
+POST https://openapi.chzzk.naver.com/auth/v1/token
+```
+
+**Request Body**:
+```json
+{
+  "grantType": "refresh_token",
+  "refreshToken": "NWG05CKHAsz4k4d3PB0wQUV9ugGlp0YuibQ4XXXXXXXX",
+  "clientId": "fefb6bbb-00c2-497c-afc2-XXXXXXXXXXXX",
+  "clientSecret": "VeIMuc9XGle7PSxIVYNwPpI2OEk_9gXoW_XXXXXXXXX"
+}
+```
+
+**Response**: 새로운 `accessToken`과 `refreshToken` 발급
+
+#### 5단계: Access Token 사용
+발급받은 Access Token을 사용하여 세션 생성 API 호출:
+```
+GET https://openapi.chzzk.naver.com/open/v1/sessions/auth
+Headers: Authorization: Bearer {accessToken}
+```
+
+**참고**: [치지직 인증 문서](https://chzzk.gitbook.io/chzzk/chzzk-api/authorization)
 
 ### 핵심 정보
 1. **연결 방식**: Socket.IO (WebSocket 아님)
@@ -77,11 +225,11 @@ cd chzzk-tts
 ### 세션 생성 API
 ```python
 # 유저 인증 (Access Token)
-GET https://open-api.chzzk.naver.com/open/v1/sessions/auth
+GET https://openapi.chzzk.naver.com/open/v1/sessions/auth
 Headers: Authorization: Bearer {access_token}
 
 # Client 인증
-GET https://open-api.chzzk.naver.com/open/v1/sessions/auth/client
+GET https://openapi.chzzk.naver.com/open/v1/sessions/auth/client
 # Client 인증 헤더 필요 (문서 참고)
 
 # 응답
@@ -122,18 +270,19 @@ sio.on("CHAT", on_chat_message)     # 채팅 메시지
 }
 ```
 
-### 채널 구독 요청
-```python
-# 연결 완료 후 sessionKey 획득
-# SYSTEM 메시지의 "connected" 타입에서 sessionKey 추출
+### 채널 구독 요청 (문서: REST API)
+문서 기준 구독은 소켓 emit이 아니라 **REST API** 호출입니다.
+- **POST** `/open/v1/sessions/events/subscribe/chat`
+- Request Param: `sessionKey` (필수), 채널 지정 시 `channelId`
+- Header: `Authorization: Bearer {access_token}`
 
-subscribe_data = {
-    "sessionKey": "세션키",
-    "eventType": "CHAT",
-    "channelId": "채널ID"
-}
-sio.emit("subscribe", subscribe_data)
+```python
+# 연결 완료 후 SYSTEM "connected"에서 sessionKey 획득 후
+POST https://openapi.chzzk.naver.com/open/v1/sessions/events/subscribe/chat
+  ?sessionKey=세션키&channelId=채널ID
+  Authorization: Bearer {access_token}
 ```
+Socket.IO 클라이언트는 문서상 **Socket.IO-client 2.0.3 버전까지 지원**이므로, python-socketio는 **4.x + python-engineio 3.x** 사용 (5.x는 프로토콜 불일치).
 
 ## 5. 커뮤니티 리소스
 

@@ -1,29 +1,21 @@
-# HTTP 클라이언트
+# HTTP client
 httpx>=0.25.0
+
+# Socket.IO (Chzzk: docs say "Socket.IO-client 2.0.3 until supported" -> use 4.x for protocol compat)
+python-socketio[asyncio_client]>=4.0.0,<5.0.0
+python-engineio>=3.0.0,<4.0.0
 aiohttp>=3.9.0
 
-# Socket.IO (치지직 API는 Socket.IO 사용)
-python-socketio>=5.10.0
-aiohttp>=3.9.0  # Socket.IO의 async 클라이언트에 필요
-
-# VTube Studio API
-pyvts>=0.1.0
-
-# TTS 및 오디오 처리
-torch>=2.0.0
-torchaudio>=2.0.0
-transformers>=4.35.0
-sentencepiece>=0.1.99
-
-# 환경 변수 관리
+# Env vars
 python-dotenv>=1.0.0
 
-# 유틸리티
-pydantic>=2.0.0
-pyyaml>=6.0
-
-# 로깅
-loguru>=0.7.0
-
-# 토큰 카운팅 (tiktoken 또는 다른 라이브러리)
-tiktoken>=0.5.0
+# --- Unused for now; add when implementing TTS / VTube Studio / AI
+# pyvts>=0.1.0
+# torch>=2.0.0
+# torchaudio>=2.0.0
+# transformers>=4.35.0
+# sentencepiece>=0.1.99
+# pydantic>=2.0.0
+# pyyaml>=6.0
+# loguru>=0.7.0
+# tiktoken>=0.5.0
