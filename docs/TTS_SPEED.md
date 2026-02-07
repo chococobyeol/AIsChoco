@@ -2,7 +2,8 @@
 
 ## Qwen3-TTS에서 쓸 수 있는 경량 모델
 
-- **Qwen3-TTS-12Hz-0.6B-CustomVoice** (현재 사용 중) = 공식 **최소** 모델 (약 0.6B 파라미터, VRAM 약 2GB).
+- **Qwen3-TTS-12Hz-0.6B-CustomVoice** (현재 사용 중) = 공식 **최소** 모델 (약 0.6B 파라미터, VRAM 약 2GB). 프리셋 목소리 + `instruct` 감정/억양.
+- **Qwen3-TTS-12Hz-0.6B-Base** = 제로샷 음성 클로닝용. 참조 음성 약 3초만 주면 그 목소리로 합성. 예제: `python examples/tts_clone_example.py`.
 - 1.7B는 더 크고 느리므로, **Qwen3-TTS 계열에서는 0.6B보다 작은 모델이 없습니다.**
 
 ## Qwen3-TTS 속도 올리는 방법

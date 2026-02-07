@@ -90,6 +90,18 @@ python examples/chzzk_auth_example.py
 python examples/chzzk_chat_example.py
 ```
 
+### TTS 예제 (프로젝트 루트에서)
+```bash
+# CustomVoice: 프리셋 목소리(Sohee 등) + 감정 instruct
+python examples/tts_test_example.py
+
+# Base 제로샷 클로닝: 참조 음성(파일 내 REF_AUDIO, REF_TEXT)으로 그 목소리 합성
+python examples/tts_clone_example.py
+
+# Voice Design then Clone: 16세 여성 중립 톤 등 목소리 설계 후 클로닝 (참조는 AI 생성)
+python examples/tts_design_then_clone_example.py
+```
+
 **⚠️ 중요**: 실제 사용 전에 다음을 설정해야 합니다:
 1. 가상환경 활성화 후 `pip install -r requirements.txt`
 2. 치지직 개발자 센터에서 애플리케이션 등록 및 Client ID/Secret 발급

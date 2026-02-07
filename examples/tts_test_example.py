@@ -47,16 +47,18 @@ def main():
         pass
     model = Qwen3TTSModel.from_pretrained(model_id, **load_kwargs)
 
-    # 테스트 문장 (한국어, Sohee 스피커)
-    test_text = "간장 공장 공장장은 강 공장장이고, 된장 공장 공장장은 장 공장장이다."
+    # 테스트 문장 (한국어, Sohee 스피커). instruct로 감정/억양 제어 가능
+    test_text = "와, 오늘 날씨 정말 좋다!"
     language = "Korean"
     speaker = "Sohee"
+    instruct = "기쁘고 신나게 말해줘."  # 빈 문자열 "" 이면 기본 톤. 예: "슬픈 어조로", "화난语气로"
 
-    print(f"TTS 생성 중: '{test_text}' (language={language}, speaker={speaker})")
+    print(f"TTS 생성 중: '{test_text}' (language={language}, speaker={speaker}, instruct={instruct!r})")
     wavs, sr = model.generate_custom_voice(
         text=test_text,
         language=language,
         speaker=speaker,
+        instruct=instruct or "",  # 감정/억양 지시 (자연어). Groq emotion 연동 시 여기 전달 가능
     )
     print(f"샘플레이트: {sr}, 샘플 수: {len(wavs[0])}")
 
