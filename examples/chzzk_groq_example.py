@@ -5,6 +5,7 @@
 실행: python examples/chzzk_groq_example.py  (프로젝트 루트에서)
 
 TTS: Qwen3-TTS Base 클로닝. assets/voice_samples/ref.wav + ref_text.txt 필요. 감정별 ref_happy.wav 등 있으면 사용.
+C: 공간 부족 시 .env에 HF_HOME=D:\\경로 또는 TTSService(hf_home="D:/cache/hf") 로 캐시 경로 지정.
 """
 
 import asyncio

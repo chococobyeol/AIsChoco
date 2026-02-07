@@ -7,6 +7,7 @@ Qwen3-TTS Base 클로닝 래퍼. ref.wav(및 감정별 ref_emotion.wav)로 목�
 
 from __future__ import annotations
 
+import os
 import logging
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -35,6 +36,17 @@ def _default_ref_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "assets" / "voice_samples"
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+# Base 클론 모델: 0.6B(경량) / 1.7B(품질·끝발음 개선 기대)
+TTS_BASE_MODELS = {
+    "0.6B": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+    "1.7B": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+}
+
+
 class TTSService:
     """Qwen3-TTS Base 클로닝. 감정별 ref_emotion.wav 있으면 사용, 없으면 ref.wav."""
 
@@ -42,11 +54,23 @@ class TTSService:
         self,
         ref_audio_dir: Optional[Union[Path, str]] = None,
         ref_text: Optional[str] = None,
-        model_id: str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+        model_size: str = "1.7B",
+        model_id: Optional[str] = None,
         language: str = "Korean",
+        hf_home: Optional[Union[Path, str]] = None,
     ):
+        """
+        model_size: "0.6B"(경량, VRAM 약 2GB) 또는 "1.7B"(품질·끝발음 개선, VRAM 약 4GB).
+        model_id를 직접 주면 model_size는 무시됨.
+        hf_home: Hugging Face 모델 캐시 경로. C: 공간 부족 시 D: 등 다른 드라이브 경로 지정.
+                 미지정 시 .env의 HF_HOME 또는 프로젝트/cache/huggingface 사용.
+        """
         self.ref_audio_dir = Path(ref_audio_dir) if ref_audio_dir else _default_ref_dir()
-        self.model_id = model_id
+        self._apply_hf_cache(hf_home)
+        if model_id is not None:
+            self.model_id = model_id
+        else:
+            self.model_id = TTS_BASE_MODELS.get(model_size, TTS_BASE_MODELS["0.6B"])
         self.language = language
         self._model = None
 
@@ -62,6 +86,22 @@ class TTSService:
                     "ref_text 없음. %s 에 참조 음성 원문을 넣어주세요.",
                     ref_text_file,
                 )
+
+    def _apply_hf_cache(self, hf_home: Optional[Union[Path, str]] = None) -> None:
+        """Hugging Face 캐시를 hf_home 또는 .env HF_HOME 또는 프로젝트/cache로 설정."""
+        if hf_home is not None:
+            cache = Path(hf_home).resolve()
+        else:
+            cache = os.environ.get("HF_HOME") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+            if cache:
+                cache = Path(cache).resolve()
+            else:
+                cache = _project_root() / "cache" / "huggingface"
+        cache.mkdir(parents=True, exist_ok=True)
+        cache_str = str(cache)
+        os.environ["HF_HOME"] = cache_str
+        os.environ["HUGGINGFACE_HUB_CACHE"] = cache_str
+        logger.info("HF 캐시 경로: %s", cache_str)
 
     def _resolve_ref_audio(self, emotion: str) -> Path:
         """감정에 따라 ref_emotion.wav 사용, 없으면 ref.wav."""
@@ -129,13 +169,27 @@ class TTSService:
         )
         return wavs, sr
 
+    def _play(self, wav_array, sr: int) -> None:
+        """wav 배열 재생 (sounddevice). 설치 안 되어 있으면 무시."""
+        try:
+            import sounddevice as sd
+            if wav_array is None or len(wav_array) == 0:
+                return
+            sd.play(wav_array, samplerate=sr)
+            sd.wait()
+        except ImportError:
+            logger.warning("sounddevice 미설치. pip install sounddevice 후 재생 가능.")
+        except Exception as e:
+            logger.warning("재생 실패: %s", e)
+
     def synthesize_to_file(
         self,
         text: str,
         emotion: str = "neutral",
         out_path: Optional[Union[Path, str]] = None,
+        play: bool = True,
     ) -> Path:
-        """합성 후 wav 파일로 저장. out_path 없으면 assets/voice_samples/latest_reply.wav."""
+        """합성 후 wav 저장. play=True면 저장 직후 재생."""
         wavs, sr = self.synthesize(text, emotion=emotion)
         if out_path is None:
             out_path = _default_ref_dir() / "latest_reply.wav"
@@ -143,4 +197,6 @@ class TTSService:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         import soundfile as sf
         sf.write(str(out_path), wavs[0], sr)
+        if play and wavs[0] is not None and len(wavs[0]) > 0:
+            self._play(wavs[0], sr)
         return out_path

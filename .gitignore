@@ -39,6 +39,7 @@ ENV/
 
 # Models (큰 파일이므로 제외)
 models/
+cache/
 *.pt
 *.pth
 *.ckpt
