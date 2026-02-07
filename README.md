@@ -133,6 +133,7 @@ aischoco/
 - [docs/QUICK_START.md](docs/QUICK_START.md) - **빠른 시작 가이드** (처음 사용하는 분 추천)
 - [PRD.md](PRD.md) - 상세한 제품 요구사항 문서
 - [docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md) - 치지직 API 사용 가이드 (애플리케이션 등록, Access Token 발급 등)
+- [docs/VTUBE_STUDIO.md](docs/VTUBE_STUDIO.md) - VTube Studio 연결 및 감정 포즈 설정 (pose_mapping.json)
 
 ## 🔗 참고 자료
 
