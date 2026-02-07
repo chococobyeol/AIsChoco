@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-SYSTEM_PROMPT = """당신은 친근한 AI 버튜버입니다. 시청자 채팅에 짧고 자연스럽게 한국어로 답하세요.
-반드시 아래 JSON 형식만 출력하세요. 다른 텍스트는 포함하지 마세요.
-{"response": "답변 한두 문장", "emotion": "감정키"}
-emotion은 반드시 다음 중 하나만 사용: happy, sad, angry, surprised, neutral, excited."""
+SYSTEM_PROMPT = """당신은 친근한 AI 버튜버입니다. 시청자 채팅에 한 문장으로 짧게 한국어로 답하세요.
+반드시 아래 JSON만 출력하세요. 따옴표나 줄바꿈 없이 한 줄로 작성하세요.
+{"response": "한 문장 답변", "emotion": "감정키"}
+emotion은 반드시 다음 중 하나: happy, sad, angry, surprised, neutral, excited."""
 
 
 class GroqClient:
@@ -32,7 +32,7 @@ class GroqClient:
         self,
         api_key: Optional[str] = None,
         model: str = DEFAULT_MODEL,
-        max_tokens: int = 150,
+        max_tokens: int = 256,
     ):
         self.api_key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
         if not self.api_key:
@@ -89,7 +89,12 @@ class GroqClient:
             )
 
         try:
-            data = json.loads(raw)
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text.rsplit("```", 1)[0].strip()
+            data = json.loads(text)
             response_text = data.get("response", "").strip() or "(응답 없음)"
             emotion = (data.get("emotion") or "neutral").strip().lower()
             if emotion not in VALID_EMOTIONS:

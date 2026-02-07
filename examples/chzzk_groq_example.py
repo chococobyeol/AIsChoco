@@ -1,8 +1,10 @@
 """
-치지직 채팅 수신 → Groq 호출 → 답변+감정 출력 예제
+치지직 채팅 수신 → Groq 호출 → 답변+감정 출력 → TTS wav 저장
 
 .env에 CHZZK_CHANNEL_ID, CHZZK_ACCESS_TOKEN, GROQ_API_KEY 설정 후 실행.
 실행: python examples/chzzk_groq_example.py  (프로젝트 루트에서)
+
+TTS: Qwen3-TTS Base 클로닝. assets/voice_samples/ref.wav + ref_text.txt 필요. 감정별 ref_happy.wav 등 있으면 사용.
 """
 
 import asyncio
@@ -17,6 +19,7 @@ from dotenv import load_dotenv
 
 from src.chat import ChatClientFactory, ChatMessage
 from src.ai import GroqClient, AIResponse
+from src.tts import TTSService
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -32,8 +35,8 @@ def _groq_reply(client: GroqClient, message: ChatMessage) -> AIResponse:
     return client.reply(message.message, user_name=message.user)
 
 
-async def on_chat_message(groq_client: GroqClient, message: ChatMessage):
-    """채팅 수신 시 Groq로 답변 생성 후 출력"""
+async def on_chat_message(groq_client: GroqClient, tts_service: TTSService, message: ChatMessage):
+    """채팅 수신 시 Groq로 답변 생성 → 출력 → TTS로 wav 저장"""
     print(f"\n[{message.timestamp}] {message.user}: {message.message}")
     try:
         ai_response = await asyncio.to_thread(
@@ -41,6 +44,16 @@ async def on_chat_message(groq_client: GroqClient, message: ChatMessage):
         )
         print(f"  → [감정:{ai_response.emotion}] {ai_response.response}")
         print(f"  (처리: {ai_response.processing_time:.2f}s)")
+        try:
+            out_path = await asyncio.to_thread(
+                tts_service.synthesize_to_file,
+                ai_response.response,
+                emotion=ai_response.emotion,
+            )
+            print(f"  TTS 저장: {out_path}")
+        except Exception as tts_e:
+            logger.exception("TTS 변환 중 오류: %s", tts_e)
+            print(f"  TTS 오류: {tts_e}")
     except Exception as e:
         logger.exception("Groq 처리 중 오류: %s", e)
         print(f"  → 오류: {e}")
@@ -59,17 +72,18 @@ async def main():
         return
 
     groq_client = GroqClient()
+    tts_service = TTSService()
     client = ChatClientFactory.create(
         platform="chzzk",
         channel_id=channel_id,
         access_token=access_token,
-        on_message=lambda msg: on_chat_message(groq_client, msg),
+        on_message=lambda msg: on_chat_message(groq_client, tts_service, msg),
         reconnect_delay=5.0,
         max_reconnect_attempts=10,
     )
 
     print(f"플랫폼: {client.platform_name}, 채널: {channel_id}")
-    print("채팅 수신 중... 채팅 올 때마다 Groq로 답변 생성 (종료: Ctrl+C)\n")
+    print("채팅 수신 중... Groq 답변 후 TTS로 wav 저장 (종료: Ctrl+C)\n")
     try:
         await client.start()
     except KeyboardInterrupt:
