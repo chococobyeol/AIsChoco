@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, List, Optional
 
 from openai import OpenAI
@@ -16,41 +17,67 @@ from .models import AIResponse, VALID_EMOTIONS
 
 logger = logging.getLogger(__name__)
 
+# config/character.txt 가 있으면 시스템 프롬프트 앞에 붙임
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _load_character_prompt(character_path: Optional[Path] = None) -> str:
+    """config/character.txt 내용 로드. 없으면 빈 문자열."""
+    p = character_path or (_project_root() / "config" / "character.txt")
+    if not p.exists():
+        return ""
+    try:
+        return p.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        logger.warning("캐릭터 파일 로드 실패 %s: %s", p, e)
+        return ""
+
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-SYSTEM_PROMPT = """당신은 친근한 AI 버튜버입니다. 시청자 채팅에 한 문장으로 짧게 한국어로 답하세요.
+SYSTEM_PROMPT = """시청자 채팅에 한 문장으로 짧게 한국어로 답하세요.
 반드시 아래 JSON만 출력하세요. 따옴표나 줄바꿈 없이 한 줄로 작성하세요.
 {"response": "한 문장 답변", "emotion": "감정키"}
 emotion은 반드시 다음 중 하나: happy, sad, angry, surprised, neutral, excited."""
 
-BATCH_SYSTEM_PROMPT = """당신은 친근한 AI 버튜버입니다. 아래는 말하는 동안 들어온 채팅 목록입니다.
-도배·스팸·쓸데없는 채팅은 무시하고, 비슷한 내용은 하나로 묶어서 최대 2개의 짧은 답변만 생성하세요.
+BATCH_SYSTEM_PROMPT = """아래는 말하는 동안 들어온 채팅 목록입니다.
+도배·스팸·쓸데없는 채팅은 무시하고, 채팅들을 종합해서 답변 하나만 생성하세요. 한 문장이 길어도 됩니다.
 답할 게 없으면 replies를 빈 배열로 두세요.
-반드시 아래 JSON만 출력하세요 (한 줄): {"replies": [{"response": "한 문장", "emotion": "감정키"}, ...]}
-emotion은 반드시: happy, sad, angry, surprised, neutral, excited 중 하나."""
+반드시 아래 JSON만 출력하세요 (한 줄): {"replies": [{"response": "한 문장(길어도 됨)", "emotion": "감정키"}]}
+replies는 최대 1개. emotion은 반드시: happy, sad, angry, surprised, neutral, excited 중 하나."""
 
 SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. 중요한 맥락과 주제는 유지하세요. 한국어로 한 문단 이내."""
 
 
 class GroqClient:
-    """Groq API로 채팅 답변 + 감정 생성"""
+    """Groq API로 채팅 답변 + 감정 생성. config/character.txt 있으면 성격·자기 정보로 시스템 프롬프트 보강."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: str = DEFAULT_MODEL,
         max_tokens: int = 256,
+        character_path: Optional[Path] = None,
     ):
         self.api_key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
         if not self.api_key:
             raise ValueError("GROQ_API_KEY가 설정되지 않았습니다. .env 또는 인자로 전달하세요.")
         self.model = model
         self.max_tokens = max_tokens
+        self._character_prompt = _load_character_prompt(character_path)
+        if self._character_prompt:
+            logger.info("캐릭터 설정 로드: config/character.txt")
         self._client = OpenAI(
             api_key=self.api_key,
             base_url=GROQ_BASE_URL,
         )
+
+    def _system_prompt(self, base: str) -> str:
+        """캐릭터 설정이 있으면 앞에 붙여서 반환."""
+        if not self._character_prompt:
+            return base
+        return f"{self._character_prompt}\n\n{base}"
 
     def reply(
         self,
@@ -76,7 +103,7 @@ class GroqClient:
         if user_name:
             content = f"{user_name}: {content}"
 
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": self._system_prompt(SYSTEM_PROMPT)}]
         if context_messages:
             messages.extend(context_messages)
         messages.append({"role": "user", "content": content})
@@ -154,7 +181,7 @@ class GroqClient:
         context_messages: Optional[List[dict]] = None,
     ) -> List[AIResponse]:
         """
-        말하는 동안 쌓인 채팅을 한 번에 보고, 합치기/걸러내기 후 최대 2개 답변 생성.
+        말하는 동안 쌓인 채팅을 한 번에 보고, 합치기/걸러내기 후 답변 1개 생성 (길어도 됨).
         pending: .user, .message 속성 있는 객체 리스트 (ChatMessage 등).
         """
         if not pending:
@@ -169,7 +196,7 @@ class GroqClient:
         if not content.strip():
             return []
 
-        messages = [{"role": "system", "content": BATCH_SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": self._system_prompt(BATCH_SYSTEM_PROMPT)}]
         if context_messages:
             messages.extend(context_messages)
         messages.append({"role": "user", "content": f"채팅 목록:\n{content}"})
@@ -199,7 +226,7 @@ class GroqClient:
             if not isinstance(arr, list):
                 arr = []
             out = []
-            for i, item in enumerate(arr[:2]):
+            for i, item in enumerate(arr[:1]):
                 if not isinstance(item, dict):
                     continue
                 r = (item.get("response") or "").strip()

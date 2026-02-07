@@ -5,7 +5,7 @@
 실행: python examples/chzzk_groq_example.py  (프로젝트 루트에서)
 
 - 채팅은 큐에만 쌓고, 말하기가 끝난 뒤에만 쌓인 채팅을 한꺼번에 처리합니다.
-- Groq가 도배/스팸을 걸러내고 비슷한 내용을 묶어 최대 2개 답변만 생성합니다.
+- Groq가 도배/스팸을 걸러내고 비슷한 내용을 묶어 답변 1개만 생성합니다 (한 문장이 길어도 됨).
 - 대화 히스토리(토큰 기반 + 요약 + RAG용 백업)를 유지합니다.
 립싱크: .env에 TTS_OUTPUT_DEVICE=VB-Audio Virtual Cable 등으로 TTS 출력을 가상 케이블로 두고, VTS 오디오 입력을 해당 장치로 설정.
 """
@@ -51,8 +51,8 @@ async def reply_worker(
     큐에서 메시지를 꺼내, 말 끝난 뒤에만 일괄 처리.
     1) 한 개 get(대기) → 나머지 전부 drain
     2) 히스토리에 user 추가, flush_summary, context 획득
-    3) reply_batch(합치기/걸러내기) → 최대 2개 답변
-    4) 각 답변: 히스토리에 assistant 추가 → TTS+재생(직렬) → VTS 감정
+    3) reply_batch(합치기/걸러내기) → 답변 1개
+    4) 해당 답변: 히스토리에 assistant 추가 → TTS+재생 → VTS 감정
     5) flush_summary 한 번 더 후 반복
     """
     while True:
