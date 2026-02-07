@@ -58,14 +58,20 @@ class TTSService:
         model_id: Optional[str] = None,
         language: str = "Korean",
         hf_home: Optional[Union[Path, str]] = None,
+        play_device: Optional[Union[int, str]] = None,
     ):
         """
         model_size: "0.6B"(경량, VRAM 약 2GB) 또는 "1.7B"(품질·끝발음 개선, VRAM 약 4GB).
         model_id를 직접 주면 model_size는 무시됨.
         hf_home: Hugging Face 모델 캐시 경로. C: 공간 부족 시 D: 등 다른 드라이브 경로 지정.
                  미지정 시 .env의 HF_HOME 또는 프로젝트/cache/huggingface 사용.
+        play_device: TTS 재생 출력 장치. VB-Cable 등으로 지정하면 VTS 립싱크 가능.
+                     정수(장치 인덱스) 또는 문자열(장치 이름). .env TTS_OUTPUT_DEVICE 사용 가능.
         """
         self.ref_audio_dir = Path(ref_audio_dir) if ref_audio_dir else _default_ref_dir()
+        _env_device = (os.environ.get("TTS_OUTPUT_DEVICE") or "").strip() or None
+        self.play_device = play_device if play_device is not None else _env_device
+        self._resolved_play_device = None  # VB-Cable 자동 감지 시 캐시
         self._apply_hf_cache(hf_home)
         if model_id is not None:
             self.model_id = model_id
@@ -169,13 +175,60 @@ class TTSService:
         )
         return wavs, sr
 
+    def _resolve_vb_cable_device(self):
+        """출력 장치 목록에서 CABLE / VB-Audio 포함된 장치를 찾아 캐시. 립싱크용."""
+        if self._resolved_play_device is not None:
+            return
+        try:
+            import sounddevice as sd
+            for i in range(64):
+                try:
+                    dev = sd.query_devices(i)
+                except Exception:
+                    break
+                name = (dev.get("name", "") if isinstance(dev, dict) else getattr(dev, "name", "")) or ""
+                max_out = (dev.get("max_output_channels", 0) or 0) if isinstance(dev, dict) else (getattr(dev, "max_output_channels", 0) or 0)
+                if max_out > 0 and ("CABLE" in name.upper() or "VB-AUDIO" in name.upper() or "VB-CABLE" in name.upper()):
+                    self._resolved_play_device = i
+                    logger.info("TTS 립싱크용 출력 장치 자동 선택: [%s] %s", i, name)
+                    return
+        except Exception as e:
+            logger.debug("VB-Cable 장치 검색 중 오류: %s", e)
+        self._resolved_play_device = False  # 없음
+
     def _play(self, wav_array, sr: int) -> None:
-        """wav 배열 재생 (sounddevice). 설치 안 되어 있으면 무시."""
+        """wav 배열 재생 (sounddevice). VB-Cable 등 지정 시 해당 장치로 출력 → VTS 립싱크.
+        장치가 24kHz를 지원하지 않으면 48kHz로 리샘플 후 재생 (Invalid sample rate 방지).
+        """
         try:
             import sounddevice as sd
             if wav_array is None or len(wav_array) == 0:
                 return
-            sd.play(wav_array, samplerate=sr)
+            play_sr = sr
+            play_wav = wav_array
+            device = self.play_device
+            if device is None:
+                self._resolve_vb_cable_device()
+                if self._resolved_play_device is not None and self._resolved_play_device is not False:
+                    device = self._resolved_play_device
+            if device is not None:
+                # VB-Cable 등은 보통 48kHz/44.1kHz만 지원. 24kHz면 48kHz로 리샘플.
+                if sr not in (44100, 48000):
+                    try:
+                        import numpy as np
+                        play_sr = 48000
+                        n = len(play_wav)
+                        new_len = int(n * play_sr / sr)
+                        x_old = np.arange(n, dtype=np.float64)
+                        x_new = np.linspace(0, n - 1, new_len, dtype=np.float64)
+                        play_wav = np.interp(x_new, x_old, np.asarray(play_wav, dtype=np.float64)).astype(np.float32)
+                    except Exception as resample_e:
+                        logger.debug("리샘플 실패, 기본 sr 유지: %s", resample_e)
+                        play_sr = sr
+            kwargs = {"samplerate": play_sr}
+            if device is not None:
+                kwargs["device"] = int(device) if isinstance(device, (int, str)) and str(device).isdigit() else device
+            sd.play(play_wav, **kwargs)
             sd.wait()
         except ImportError:
             logger.warning("sounddevice 미설치. pip install sounddevice 후 재생 가능.")

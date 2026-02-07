@@ -243,7 +243,9 @@ class ChzzkSocketIOClient(ChatClient):
             )
             
             if self.on_message:
-                await self.on_message(message)
+                cb = self.on_message(message)
+                if asyncio.iscoroutine(cb):
+                    await cb
                 
         except Exception as e:
             logger.error(f"[{self.platform_name}] 채팅 메시지 처리 오류: {e}, 데이터: {data}")
