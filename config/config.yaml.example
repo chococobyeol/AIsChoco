@@ -1,8 +1,8 @@
-# AIsChoco 설정 파일
+# AIsChoco 설정 파일 (참고용. 실제 Groq/히스토리는 코드 기본값 및 .env 사용)
 
-# Groq API 설정
+# Groq API 설정 (실제는 .env GROQ_MODEL, 기본 openai/gpt-oss-120b)
 groq:
-  model: "llama-3-70b-8192"
+  model: "openai/gpt-oss-120b"
   temperature: 0.7
   max_tokens: 500
   timeout: 5
@@ -18,10 +18,10 @@ tts:
   sample_rate: 16000
   first_chunk_latency_target: 100  # ms
 
-# 히스토리 설정
+# 히스토리 설정 (실제는 ai/chat_history.py 기본값: 5000/7000, 8K 제한)
 history:
-  max_recent_tokens: 4000
-  summary_threshold: 6000
+  max_recent_tokens: 5000
+  summary_threshold: 7000
   summary_file: "history/summary.json"
 
 # VTS 설정
@@ -30,7 +30,7 @@ vts:
   port: 8001
   update_rate: 30  # FPS
 
-# 포즈 제어 설정
+# 포즈 제어 설정 (미구현: 보간/Idle은 추후 적용 예정)
 pose:
   interpolation_time: 0.3  # 초
   idle_animation: true

@@ -67,19 +67,18 @@ CHZZK_REDIRECT_URI=http://localhost:8080/callback
 # 치지직 채널 ID (라이브 방송 채널 ID)
 CHZZK_CHANNEL_ID=your-channel-id-here
 
-# Groq API 키
+# 치지직 Access Token (chzzk_auth_example.py 실행 후 발급받아 추가)
+CHZZK_ACCESS_TOKEN=your-access-token-here
+
+# Groq API 키 (기본 모델: openai/gpt-oss-120b, 변경 시 아래 추가)
 GROQ_API_KEY=your-groq-api-key-here
+# GROQ_MODEL=openai/gpt-oss-120b
 
-# VTube Studio 설정
-VTUBE_STUDIO_HOST=localhost
-VTUBE_STUDIO_PORT=8001
-VTUBE_STUDIO_TOKEN=your-vtube-studio-token-here
+# VTube Studio: 앱 실행 후 chzzk_groq_example.py 최초 실행 시 연결 허용하면
+# 토큰이 config/vts_token.txt 에 자동 저장됩니다. .env에 VTS_* 는 선택.
 
-# Qwen3-TTS 모델 경로
-QWEN3_TTS_MODEL_PATH=models/qwen3-tts
-
-# 로깅 레벨
-LOG_LEVEL=INFO
+# (선택) Colab TTS 사용 시
+# TTS_REMOTE_URL=https://xxxx.ngrok.io
 ```
 
 ⚠️ **보안 주의사항**:
@@ -115,14 +114,14 @@ https://chzzk.naver.com/live/{CHANNEL_ID}
 
 ## 5. 테스트 실행
 
-### 5.1 채팅 클라이언트 테스트
+### 5.1 채팅만 수신 테스트
 ```bash
-python src/chat/example_usage.py
+python examples/chzzk_chat_example.py
 ```
 
-### 5.2 전체 시스템 실행
+### 5.2 전체 시스템 실행 (채팅 + Groq + TTS + VTS)
 ```bash
-python src/core/pipeline.py
+python examples/chzzk_groq_example.py
 ```
 
 ## 다음 단계

@@ -39,7 +39,7 @@
   - 채팅 히스토리 관리 (최근 N개 메시지 유지)
 
 ### 2.2 고속 AI 추론 엔진
-- **기능**: Groq API(Llama 3 70B)를 사용하여 1초 미만의 응답 생성
+- **기능**: Groq API(기본: openai/gpt-oss-120b, .env GROQ_MODEL로 변경 가능)를 사용하여 1초 미만의 응답 생성
 - **요구사항**:
   - 응답 생성 시간: < 1초
   - 감정 분석 정확도: > 85%
@@ -85,7 +85,7 @@
 ### 3.2 AI/ML 스택
 | 구분 | 선택 기술 | 버전 | 비고 |
 | --- | --- | --- | --- |
-| **LLM** | Groq API | - | Llama 3 70B 모델 사용 |
+| **LLM** | Groq API | - | 기본 openai/gpt-oss-120b (.env GROQ_MODEL로 변경 가능) |
 | **TTS** | Qwen3-TTS | 12Hz/1.7B | 로컬 GPU 구동 (0.6B 대체 가능) |
 | **최적화** | FlashAttention | latest | TTS 추론 속도 향상 |
 | **오디오 처리** | torchaudio | latest | 오디오 스트리밍 |
@@ -241,13 +241,13 @@
   - 스팸 메시지 필터
   - 부적절 언어 필터 (옵션)
   - 최소 길이 제한
-- **히스토리 관리**: 최근 50개 메시지 유지 (컨텍스트용)
+- **히스토리 관리**: 토큰 기반 슬라이딩 윈도우(기본 최근 5K 토큰, 7K 도달 시 요약, 8K 제한)로 컨텍스트 유지
 
 ### 4.5 Groq API 연동
 
 #### 4.5.1 API 설정
 - **엔드포인트**: Groq API 엔드포인트
-- **모델**: Llama 3 70B
+- **모델**: 기본 openai/gpt-oss-120b (.env GROQ_MODEL로 변경 가능)
 - **인증**: API 키 기반 인증
 - **요청 제한**: Rate limiting 처리
 
@@ -255,9 +255,14 @@
 - **시스템 프롬프트**: 캐릭터 성격 및 역할 정의
 - **컨텍스트 관리**: **매 요청마다 이전 채팅 히스토리를 포함해야 맥락 이해 가능**
   - **중요**: Groq API는 stateless이므로, 이전 대화 내용을 자동으로 기억하지 않음
-  - **히스토리 관리 전략: 슬라이딩 윈도우 + 요약 히스토리**
-    - **기본 구조**:
-      - 메모리: 최근 10개 대화 (user + assistant 쌍) 유지
+  - **히스토리 관리 전략: 토큰 기반 슬라이딩 윈도우 + 요약 (현재 구현)**
+    - **구현 구조**:
+      - 메모리: 최근 대화를 토큰 수로 관리 (기본 최대 5,000 토큰 유지)
+      - 요약: 누적 토큰이 7,000 도달 시 오래된 분량 요약 후 `history/summary.json` 저장, `history/summaries/`에 타임스탬프 백업
+      - 수동 백업: `history/backups/` (DO_BACKUP 등)
+    - **참고: 아래 "동작 방식"은 메시지 개수 기반 설명이며, 실제 코드는 토큰 기반으로 동작함**
+    - **기본 구조 (개념)**:
+      - 메모리: 최근 N개 대화 (user + assistant 쌍) 유지
       - 파일: 요약된 이전 대화 히스토리 저장 (`history/summary.json`)
     - **동작 방식**:
       1. **1~10번째 대화**: 메모리의 최근 대화만 사용
@@ -303,7 +308,7 @@
   - **요청 구조 예시** (12번째 대화 이후):
     ```json
     {
-      "model": "llama-3-70b-8192",
+      "model": "openai/gpt-oss-120b",
       "messages": [
         {"role": "system", "content": "당신은 친근한 AI 버튜버입니다..."},
         {"role": "system", "content": "[이전 대화 요약] 사용자가 게임에 대해 이야기하고 있었고..."},
@@ -318,8 +323,8 @@
     }
     ```
   - **토큰 제한 고려**: 
-    - Llama 3 70B 모델의 컨텍스트 윈도우: 8,192 토큰
-    - 요약 히스토리 + 최근 10개 대화가 토큰 제한 내에 들어가도록 조정
+    - Groq 모델 컨텍스트 제한에 맞춰 최근 5K 토큰 유지, 7K 도달 시 요약 (8K 제한 전제)
+    - 요약 히스토리 + 최근 대화가 토큰 제한 내에 들어가도록 조정
     - 요약 길이도 토큰 제한 내에서 관리
   - **개선된 히스토리 관리 전략 (권장)**:
     - **방법 1: 토큰 기반 슬라이딩 윈도우** (가장 권장)
@@ -374,7 +379,7 @@
 - **요청 구조 예시**:
   ```json
   {
-    "model": "llama-3-70b-8192",
+    "model": "openai/gpt-oss-120b",
     "messages": [
       {"role": "system", "content": "당신은 친근한 AI 버튜버입니다..."},
       {"role": "user", "content": "이전 채팅 메시지 1"},
@@ -426,62 +431,53 @@
 [OBS 송출]
 ```
 
-### 5.2 모듈 구조
+### 5.2 모듈 구조 (현재 구현 기준)
 ```
 aischoco/
 ├── src/
 │   ├── chat/
 │   │   ├── chzzk_client.py      # 치지직 Socket.IO 클라이언트
 │   │   ├── chat_parser.py        # 채팅 파싱 및 필터링
-│   │   ├── chat_queue.py         # 채팅 큐 관리
-│   │   └── chat_history.py       # 채팅 히스토리 관리 (슬라이딩 윈도우 + 요약)
+│   │   ├── base_client.py, client_factory.py
+│   │   └── (chat_history는 ai/ 에 있음)
 │   ├── ai/
-│   │   ├── groq_client.py        # Groq API 클라이언트
-│   │   ├── prompt_manager.py     # 프롬프트 관리 (히스토리 포함)
-│   │   └── response_parser.py    # 응답 파싱
+│   │   ├── groq_client.py        # Groq API 클라이언트 (응답 파싱 포함)
+│   │   ├── chat_history.py       # 채팅 히스토리 (토큰 기반 슬라이딩 윈도우 + 요약)
+│   │   └── models.py            # 응답/감정 모델 정의
 │   ├── tts/
-│   │   ├── qwen3_tts.py          # Qwen3-TTS 엔진
-│   │   ├── voice_clone.py        # 음성 복제 처리
-│   │   └── audio_streamer.py     # 오디오 스트리밍
+│   │   └── tts_service.py        # Qwen3-TTS 연동 (로컬/원격 TTS_REMOTE_URL)
 │   ├── vtuber/
-│   │   ├── vts_client.py         # VTS API 클라이언트
-│   │   ├── pose_controller.py    # 포즈 제어 모듈 (별도 구현)
-│   │   ├── parameter_controller.py # 파라미터 제어 및 전송
-│   │   └── interpolation.py      # 보간 알고리즘
-│   ├── core/
-│   │   ├── pipeline.py           # 메인 파이프라인
-│   │   ├── config.py             # 설정 관리
-│   │   └── logger.py             # 로깅 설정
+│   │   └── vts_client.py         # VTS API 클라이언트 (포즈 주입 포함)
+│   │   # 미구현: pose_controller, parameter_controller, interpolation(Lerp), Idle
+│   ├── core/                     # (메인 진입점은 examples/chzzk_groq_example.py)
 │   └── utils/
-│       ├── audio_utils.py         # 오디오 유틸리티
-│       └── text_utils.py          # 텍스트 유틸리티
-├── models/
-│   └── qwen3-tts/                 # TTS 모델 저장
-├── assets/
-│   └── voice_samples/             # 음성 샘플
+│       └── chzzk_auth.py         # 치지직 인증
+├── examples/                    # 실행 진입점
+│   ├── chzzk_groq_example.py    # 전체 파이프라인 (채팅+Groq+TTS+VTS)
+│   ├── chzzk_auth_example.py, chzzk_chat_example.py
+│   └── tts_*_example.py, colab_tts_server.py
+├── models/                       # TTS 모델 저장
+├── assets/voice_samples/        # 음성 샘플
 ├── config/
-│   ├── config.yaml                # 메인 설정
-│   └── pose_mapping.json          # 감정-포즈 매핑 설정
+│   ├── character.txt             # 캐릭터 성격 (Groq 시스템 프롬프트 보강)
+│   ├── pose_mapping.json         # 감정-포즈 매핑
+│   └── vts_token.txt             # VTS 연결 토큰 (자동 저장)
 ├── history/
-│   └── summary.json               # 요약 히스토리 저장
+│   ├── summary.json              # 요약 히스토리
+│   ├── summaries/                # 요약 타임스탬프 백업
+│   └── backups/                  # 수동 백업
 ├── requirements.txt
-├── .env.example
 ├── README.md
 └── PRD.md
 ```
 
 ### 5.3 데이터 흐름
-1. **채팅 수집**: 치지직 Socket.IO → 채팅 파서 → 채팅 큐 → 채팅 히스토리 저장
+1. **채팅 수집**: 치지직 Socket.IO → 채팅 파서 → (예제에서 큐/배치 처리) → ai/chat_history에 반영
 2. **AI 처리**: 
-   - 채팅 큐에서 새 메시지 추출
-   - 채팅 히스토리에 user 메시지 추가
-   - **11번째 대화인지 확인**:
-     - 11번째인 경우: 현재 10개 대화를 요약하여 파일에 저장
-     - 가장 오래된 1개 대화를 메모리에서 제거
-   - 프롬프트 매니저가 요약 히스토리 + 최근 10개 대화 조회
-   - 요약 히스토리 + 최근 대화 + 새 메시지를 포함한 요청을 Groq API로 전송
-   - 응답 파서가 JSON 파싱 → 응답 큐에 저장
-   - 응답을 채팅 히스토리에 추가 (assistant 역할로)
+   - 새 메시지 수신 시 채팅 히스토리에 user 메시지 추가
+   - **토큰 임계치(7K) 도달 시**: 오래된 분량 요약 후 summary.json 및 history/summaries/에 저장, 메모리에서 제거
+   - groq_client가 요약 히스토리 + 최근 대화(토큰 기준) + 새 메시지로 Groq API 요청
+   - JSON 파싱 후 응답·감정 반환, 채팅 히스토리에 assistant 메시지 추가
 3. **음성 생성**: 응답 큐 → Qwen3-TTS → 오디오 스트림 → VB-Cable
 4. **캐릭터 제어**: 응답 파서 → 포즈 제어 모듈 → 파라미터 계산 → VTS API → 파라미터 주입
 5. **동기화**: 오디오 스트림 + 파라미터 제어 → VTS 립싱크
@@ -602,7 +598,7 @@ class CharacterParameters:
 - **엔드포인트**: `https://api.groq.com/openai/v1/chat/completions`
 - **인증**: Bearer Token
 - **요청 형식**: OpenAI 호환 형식
-- **모델**: `llama-3-70b-8192`
+- **모델**: 기본 `openai/gpt-oss-120b` (.env GROQ_MODEL로 변경 가능)
 
 ### 7.3 치지직 API
 - **⚠️ 중요**: 실제 API 스펙은 공식 문서 확인 필수

@@ -5,7 +5,7 @@
 ## 🚀 주요 기능
 
 - **실시간 채팅 수집**: 치지직 Socket.IO API를 통한 지연 없는 채팅 데이터 수집
-- **고속 AI 추론**: Groq API(Llama 3 70B)를 사용하여 1초 미만의 응답 생성
+- **고속 AI 추론**: Groq API(기본: gpt-oss-120b, .env GROQ_MODEL로 변경 가능)를 사용하여 1초 미만의 응답 생성
 - **로컬 음성 생성**: Qwen3-TTS 모델을 로컬 GPU 환경에서 구동하여 저지연 고음질 음성 출력
 - **멀티모달 반응**: 답변 내용에 맞춘 포즈, 립싱크 동시 수행
 - **정밀 캐릭터 제어**: VTube Studio API를 통한 부드러운 움직임 구현
@@ -52,15 +52,9 @@ venv\Scripts\activate  # Windows
    - 로그인 리디렉션 URL 등록 (예: `http://localhost:8080/callback`)
 
 5. 환경 변수 설정
-```bash
-cp .env.example .env
-# .env 파일을 열어 발급받은 정보 입력
-# - CHZZK_CLIENT_ID: 치지직 Client ID
-# - CHZZK_CLIENT_SECRET: 치지직 Client Secret
-# - CHZZK_REDIRECT_URI: 등록한 리디렉션 URL
-# - CHZZK_CHANNEL_ID: 라이브 방송 채널 ID
-# - GROQ_API_KEY: Groq API 키
-```
+- 프로젝트 루트에 `.env` 파일을 생성하고 아래 항목을 입력하세요.
+- **필수**: CHZZK_CLIENT_ID, CHZZK_CLIENT_SECRET, CHZZK_REDIRECT_URI, CHZZK_CHANNEL_ID, CHZZK_ACCESS_TOKEN(인증 후), GROQ_API_KEY
+- **선택**: GROQ_MODEL(기본 openai/gpt-oss-120b), TTS_REMOTE_URL(Colab TTS 사용 시). 자세한 예시는 [docs/QUICK_START.md](docs/QUICK_START.md) 참고.
 
 6. Qwen3-TTS 모델 다운로드
 - Hugging Face 또는 공식 저장소에서 모델 다운로드
@@ -72,16 +66,20 @@ cp .env.example .env
 
 ## ⚙️ 설정
 
-자세한 설정 방법은 [PRD.md](PRD.md) 문서를 참고하세요.
+- **캐릭터 성격**: `config/character.txt`에 작성 시 Groq 시스템 프롬프트 앞에 붙어 적용됩니다. (예: `character.txt.example` 참고)
+- **VTS 포즈**: `config/pose_mapping.json`으로 감정별 파라미터 설정. 최초 연결 시 토큰은 `config/vts_token.txt`에 저장됩니다. ([docs/VTUBE_STUDIO.md](docs/VTUBE_STUDIO.md))
+- **원격 TTS**: Colab에서 TTS 서버를 띄우고 `.env`에 `TTS_REMOTE_URL`을 설정하면 로컬 대신 원격 TTS를 사용합니다. ([docs/COLAB_TTS.md](docs/COLAB_TTS.md))
+- 자세한 요구사항은 [PRD.md](PRD.md)를 참고하세요.
 
 ## 🎮 사용법
 
-### 기본 실행
+### 전체 시스템 실행 (치지직 + Groq + TTS + VTS)
 ```bash
-python src/core/pipeline.py
+# 가상환경 활성화 후 프로젝트 루트에서
+python examples/chzzk_groq_example.py
 ```
 
-### 치지직 예제 실행 (가상환경 활성화 후, 프로젝트 루트에서)
+### 치지직 예제만 실행 (가상환경 활성화 후, 프로젝트 루트에서)
 ```bash
 # 1) Access Token 발급 (한 번만)
 python examples/chzzk_auth_example.py
@@ -117,15 +115,16 @@ python examples/tts_design_then_clone_example.py
 aischoco/
 ├── src/
 │   ├── chat/          # 치지직 채팅 수집
-│   ├── ai/            # Groq API 연동
+│   ├── ai/            # Groq API 연동, 채팅 히스토리(토큰 기반 요약)
 │   ├── tts/           # Qwen3-TTS 음성 생성
-│   ├── vtuber/        # VTube Studio 제어
-│   ├── core/           # 메인 파이프라인
-│   └── utils/          # 유틸리티
-├── models/             # TTS 모델 저장
-├── assets/             # 음성 샘플 등
-├── config/             # 설정 파일
-└── history/            # 채팅 히스토리
+│   ├── vtuber/        # VTube Studio 제어 (vts_client)
+│   ├── core/          # (예제는 examples/ 에서 실행)
+│   └── utils/         # 유틸리티
+├── examples/         # 실행 진입점 (chzzk_groq_example.py 등)
+├── models/            # TTS 모델 저장
+├── assets/            # 음성 샘플 등
+├── config/            # character.txt, pose_mapping.json 등
+└── history/           # summary.json, summaries/, backups/
 ```
 
 ## 📚 문서
@@ -134,6 +133,7 @@ aischoco/
 - [PRD.md](PRD.md) - 상세한 제품 요구사항 문서
 - [docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md) - 치지직 API 사용 가이드 (애플리케이션 등록, Access Token 발급 등)
 - [docs/VTUBE_STUDIO.md](docs/VTUBE_STUDIO.md) - VTube Studio 연결 및 감정 포즈 설정 (pose_mapping.json)
+- [docs/COLAB_TTS.md](docs/COLAB_TTS.md) - Colab 원격 TTS 사용 (TTS_REMOTE_URL)
 
 ## 🔗 참고 자료
 
