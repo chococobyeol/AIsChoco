@@ -289,3 +289,16 @@ class TTSService:
         if play and wavs[0] is not None and len(wavs[0]) > 0:
             self._play(wavs[0], sr)
         return out_path
+
+    def play_file(self, path: Union[Path, str]) -> None:
+        """저장된 wav 파일 재생. 재생 직전에 VTS 표정 적용 시 사용."""
+        path = Path(path)
+        if not path.exists():
+            logger.warning("재생할 파일 없음: %s", path)
+            return
+        try:
+            import soundfile as sf
+            wav_array, sr = sf.read(str(path), dtype="float32")
+            self._play(wav_array, int(sr))
+        except Exception as e:
+            logger.warning("파일 재생 실패 %s: %s", path, e)

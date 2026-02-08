@@ -183,3 +183,23 @@ class VTSClient:
         except Exception as e:
             logger.warning("VTS 파라미터 주입 실패: %s", e)
             return False
+
+    async def set_mouse_position(self, x: float, y: float) -> bool:
+        """시선/몸 방향용 마우스 입력만 전송 (MousePositionX, Y). 말하기 전 '채팅 보는' 동작에 사용."""
+        if self._vts is None:
+            if not await self.connect():
+                return False
+        try:
+            req = self._vts.vts_request.requestSetMultiParameterValue(
+                parameters=["MousePositionX", "MousePositionY"],
+                values=[float(x), float(y)],
+                weight=1.0,
+                face_found=True,
+                mode="set",
+            )
+            await self._vts.request(req)
+            logger.debug("VTS 마우스 위치: x=%.2f y=%.2f", x, y)
+            return True
+        except Exception as e:
+            logger.warning("VTS 마우스 위치 주입 실패: %s", e)
+            return False

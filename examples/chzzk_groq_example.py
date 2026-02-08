@@ -37,9 +37,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _tts_and_play(tts_service: TTSService, text: str, emotion: str):
-    """동기: TTS 생성 후 재생(끝날 때까지 대기). asyncio.to_thread에서 호출."""
-    tts_service.synthesize_to_file(text, emotion=emotion, play=True)
+def _tts_synthesize_only(tts_service: TTSService, text: str, emotion: str):
+    """동기: TTS만 합성해 파일로 저장(재생 안 함). asyncio.to_thread에서 호출."""
+    return tts_service.synthesize_to_file(text, emotion=emotion, play=False)
+
+
+async def _animate_look_back_to_center(
+    vts_client: VTSClient,
+    start_x: float = 0.7,
+    start_y: float = -0.7,
+    duration_sec: float = 0.4,
+    steps: int = 12,
+) -> None:
+    """말하는 동안 시선을 (start_x, start_y)에서 (0, 0)으로 서서히 돌림."""
+    if steps < 2:
+        return
+    delay = duration_sec / (steps - 1)
+    for i in range(steps):
+        t = i / (steps - 1) if steps > 1 else 1.0
+        x = start_x * (1 - t)
+        y = start_y * (1 - t)
+        try:
+            await vts_client.set_mouse_position(x, y)
+        except Exception:
+            pass
+        if i < steps - 1:
+            await asyncio.sleep(delay)
 
 
 async def reply_worker(
@@ -94,20 +117,34 @@ async def reply_worker(
                     continue
                 chat_history.add_assistant_message(ai_response.response)
                 print(f"  → [감정:{ai_response.emotion}] {ai_response.response}")
-                if vts_client:
-                    try:
-                        await vts_client.set_emotion(ai_response.emotion)
-                    except Exception as vts_e:
-                        logger.debug("VTS 포즈 실패: %s", vts_e)
                 try:
-                    await asyncio.to_thread(
-                        _tts_and_play,
+                    path = await asyncio.to_thread(
+                        _tts_synthesize_only,
                         tts_service,
                         ai_response.response,
                         ai_response.emotion,
                     )
                 except Exception as tts_e:
                     logger.exception("TTS 오류: %s", tts_e)
+                    continue
+                if vts_client:
+                    try:
+                        await vts_client.set_mouse_position(0.7, -0.7)
+                        await vts_client.set_emotion(ai_response.emotion)
+                    except Exception as vts_e:
+                        logger.debug("VTS 포즈 실패: %s", vts_e)
+                try:
+                    play_task = asyncio.create_task(
+                        asyncio.to_thread(tts_service.play_file, path)
+                    )
+                    if vts_client:
+                        await asyncio.sleep(0.5)
+                        await _animate_look_back_to_center(
+                            vts_client, start_x=0.8, start_y=-0.9, duration_sec=0.4
+                        )
+                    await play_task
+                except Exception as play_e:
+                    logger.warning("재생 실패: %s", play_e)
             chat_history.flush_summary(groq_client)
         except asyncio.CancelledError:
             break
