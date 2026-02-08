@@ -26,3 +26,7 @@ pyvts>=0.1.0
 # pyyaml>=6.0
 # loguru>=0.7.0
 tiktoken>=0.5.0
+
+# Overlay server (chat/speech for OBS browser source)
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0

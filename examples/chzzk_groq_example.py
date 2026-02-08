@@ -10,14 +10,16 @@
 립싱크: .env에 TTS_OUTPUT_DEVICE=VB-Audio Virtual Cable 등으로 TTS 출력을 가상 케이블로 두고, VTS 오디오 입력을 해당 장치로 설정.
 Colab TTS: .env에 TTS_REMOTE_URL=https://xxx.ngrok-free.app 설정 시 TTS를 Colab에서 원격 실행. docs/COLAB_TTS.md 참고.
 수동 백업: history/DO_BACKUP 파일을 만들면 다음 채팅 처리 시점에 history/backups/ 에 타임스탬프 백업 후 삭제됩니다.
+방송 오버레이: 채팅/대사를 OBS에 표시하려면 OBS에서 브라우저 소스 추가 → URL에 http://127.0.0.1:8765/ 입력. 포트 변경 시 .env에 OVERLAY_PORT=8765 설정.
 """
 
 import asyncio
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -27,6 +29,11 @@ from src.chat import ChatClientFactory, ChatMessage
 from src.ai import GroqClient, AIResponse, ChatHistory
 from src.tts import TTSService
 from src.vtuber import VTSClient
+from src.overlay.state import (
+    overlay_state,
+    MAX_VIEWER_MESSAGES,
+    MAX_ASSISTANT_MESSAGES,
+)
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -91,15 +98,17 @@ async def reply_worker(
                 except Exception as be:
                     logger.warning("수동 백업 실패: %s", be)
             first = await queue.get()
-            pending: List[ChatMessage] = [first]
+            pending: List[Tuple[ChatMessage, int]] = [first]
             while True:
                 try:
-                    msg = queue.get_nowait()
-                    pending.append(msg)
+                    item = queue.get_nowait()
+                    pending.append(item)
                 except asyncio.QueueEmpty:
                     break
 
-            for m in pending:
+            pending_msgs = [m for m, _ in pending]
+            pending_ids = [oid for _, oid in pending]
+            for m in pending_msgs:
                 print(f"  [대기] {m.user}: {m.message}")
                 chat_history.add_user_message(m.user or "?", m.message or "")
 
@@ -107,7 +116,7 @@ async def reply_worker(
             context = chat_history.get_context_messages()
 
             replies = await asyncio.to_thread(
-                groq_client.reply_batch, pending, context
+                groq_client.reply_batch, pending_msgs, context
             )
             if not replies:
                 logger.info("답변 없음 (모델이 replies 빈 배열 반환 또는 파싱 실패)")
@@ -127,6 +136,18 @@ async def reply_worker(
                 except Exception as tts_e:
                     logger.exception("TTS 오류: %s", tts_e)
                     continue
+                overlay_state.setdefault("assistant_messages", []).append({
+                    "message": str(ai_response.response or ""),
+                })
+                a_msgs = overlay_state.get("assistant_messages") or []
+                if len(a_msgs) > MAX_ASSISTANT_MESSAGES:
+                    overlay_state["assistant_messages"] = a_msgs[-MAX_ASSISTANT_MESSAGES:]
+                for oid in pending_ids:
+                    for v in overlay_state.get("viewer_messages") or []:
+                        if v.get("id") == oid:
+                            v["processed"] = True
+                            break
+                logger.info("Overlay: speech=%d chars", len(ai_response.response or ""))
                 if vts_client:
                     try:
                         await vts_client.set_mouse_position(0.7, -0.7)
@@ -173,13 +194,36 @@ async def main():
     if vts_client:
         print("VTube Studio 포즈 연동: config/pose_mapping.json 사용")
 
+    overlay_port = int(os.getenv("OVERLAY_PORT", "8765"))
+    try:
+        from src.overlay.server import app
+        import uvicorn
+        def run_overlay():
+            uvicorn.run(app, host="127.0.0.1", port=overlay_port, log_level="warning")
+        t = threading.Thread(target=run_overlay, daemon=True)
+        t.start()
+        print(f"방송 오버레이: http://127.0.0.1:{overlay_port}/ (OBS 브라우저 소스에 추가, uvicorn 따로 실행 금지)")
+    except Exception as e:
+        logger.debug("오버레이 서버 미시작: %s", e)
+
     queue: asyncio.Queue = asyncio.Queue()
     worker_task = asyncio.create_task(
         reply_worker(queue, groq_client, tts_service, vts_client, chat_history)
     )
 
     def on_message(msg: ChatMessage):
-        queue.put_nowait(msg)
+        viewer_list = overlay_state.setdefault("viewer_messages", [])
+        next_id = overlay_state.get("_next_id", 0) + 1
+        overlay_state["_next_id"] = next_id
+        viewer_list.append({
+            "id": next_id,
+            "user": str(getattr(msg, "user", None) or "?"),
+            "message": str(getattr(msg, "message", None) or ""),
+            "processed": False,
+        })
+        if len(viewer_list) > MAX_VIEWER_MESSAGES:
+            overlay_state["viewer_messages"] = viewer_list[-MAX_VIEWER_MESSAGES:]
+        queue.put_nowait((msg, next_id))
 
     client = ChatClientFactory.create(
         platform="chzzk",
