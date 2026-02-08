@@ -1,5 +1,10 @@
 """
 VTube Studio API 클라이언트. pyvts로 연결·인증 후 파라미터 주입.
+
+중요: VTS API의 InjectParameterDataRequest는 Live2D(출력) 파라미터가 아니라
+"default or custom 입력 파라미터"에만 값을 넣습니다. 따라서 FaceAngleX, EyeOpenLeft
+같은 입력 이름으로 보내야 하며, 모델 설정에서 해당 입력을 Live2D 파라미터(ParamAngleX 등)에
+매핑해 두어야 합니다. body/breath/leg 등은 기본 입력이 없어 커스텀 파라미터를 생성합니다.
 """
 
 from __future__ import annotations
@@ -14,6 +19,40 @@ logger = logging.getLogger(__name__)
 
 # 기본 포즈 설정 경로
 DEFAULT_POSE_CONFIG = Path(__file__).resolve().parent.parent.parent / "config" / "pose_mapping.json"
+
+# pose_mapping.json의 짧은 키 → VTS "입력" 파라미터 이름.
+# 얼굴/몸 X는 MousePositionX, Y는 MousePositionY로 통일 (VTS에서 마우스→각도 매핑 가능).
+KEY_TO_INPUT_PARAM = {
+    "angle_x": "MousePositionX",
+    "angle_y": "MousePositionY",
+    "angle_z": "FaceAngleZ",
+    "eye_l_open": "EyeOpenLeft",
+    "eye_r_open": "EyeOpenRight",
+    "brow_l_y": "BrowLeftY",
+    "brow_r_y": "BrowRightY",
+    "brow_l_angle": "AIsChocoBrowLAngle",
+    "brow_r_angle": "AIsChocoBrowRAngle",
+    "mouth_open_y": "MouthOpen",
+    "body_angle_y": "MousePositionY",
+    "body_angle_z": "MousePositionX",
+    "breath": "AIsChocoBreath",
+    "right_leg": "AIsChocoLegR",
+    "left_leg": "AIsChocoLegL",
+}
+
+# 감정 적용 시 제외할 키: 현재 포즈(각도·몸) 유지, 입은 립싱크가 제어하므로 보내지 않음.
+KEYS_EXCLUDED_FOR_EMOTION = frozenset({
+    "angle_x", "angle_y", "angle_z", "body_angle_y", "body_angle_z", "mouth_open_y",
+})
+
+# 커스텀 파라미터 생성 시 사용 (body/face X·Y는 MousePositionX/Y 사용으로 제외)
+CUSTOM_PARAMS = [
+    ("AIsChocoBrowLAngle", -1.0, 1.0, 0.0),
+    ("AIsChocoBrowRAngle", -1.0, 1.0, 0.0),
+    ("AIsChocoBreath", 0.0, 1.0, 0.5),
+    ("AIsChocoLegR", -30.0, 30.0, 0.0),
+    ("AIsChocoLegL", -30.0, 30.0, 0.0),
+]
 
 
 def load_pose_config(path: Optional[Union[Path, str]] = None) -> dict:
@@ -78,8 +117,25 @@ class VTSClient:
                 await self._vts.request_authenticate()
                 logger.info("VTube Studio에서 플러그인 연결을 허용해주세요. (최초 1회)")
 
+            await self._ensure_custom_parameters()
             logger.info("VTube Studio 연결됨.")
             return True
+
+    async def _ensure_custom_parameters(self) -> None:
+        """커스텀 입력 파라미터가 없으면 생성 (body, breath, leg 등)."""
+        for name, min_val, max_val, default_val in CUSTOM_PARAMS:
+            try:
+                req = self._vts.vts_request.requestCustomParameter(
+                    name,
+                    min=min_val,
+                    max=max_val,
+                    default_value=default_val,
+                    info=f"AIsChoco pose: {name}",
+                )
+                await self._vts.request(req)
+                logger.debug("VTS 커스텀 파라미터 생성: %s", name)
+            except Exception as e:
+                logger.debug("VTS 커스텀 파라미터 %s (이미 있거나 무시): %s", name, e)
 
     async def disconnect(self) -> None:
         async with self._lock:
@@ -89,17 +145,17 @@ class VTSClient:
                 logger.info("VTube Studio 연결 해제.")
 
     def _emotion_to_parameters(self, emotion: str) -> List[Tuple[str, float]]:
-        """감정 → (파라미터 이름, 값) 리스트. parameter_mapping 있으면 키를 매핑."""
+        """감정 → (VTS 입력 파라미터 이름, 값) 리스트. 각도·몸·입은 제외해 현재 포즈 유지, 표정만 적용."""
         emotions = self.pose_config.get("emotions") or {}
         default_emotion = self.pose_config.get("default", "neutral")
-        mapping = self.pose_config.get("parameter_mapping") or {}
         params = emotions.get(emotion) or emotions.get(default_emotion) or {}
-        out = []
+        by_name: dict[str, list[float]] = {}
         for key, value in params.items():
-            if not isinstance(value, (int, float)):
+            if key in KEYS_EXCLUDED_FOR_EMOTION or not isinstance(value, (int, float)):
                 continue
-            param_name = mapping.get(key, key)
-            out.append((param_name, float(value)))
+            input_name = KEY_TO_INPUT_PARAM.get(key, key)
+            by_name.setdefault(input_name, []).append(float(value))
+        out = [(name, sum(vals) / len(vals)) for name, vals in by_name.items()]
         return out
 
     async def set_emotion(self, emotion: str) -> bool:
@@ -112,7 +168,7 @@ class VTSClient:
             logger.debug("해당 감정 포즈 없음: %s", emotion)
             return True
         names = [p[0] for p in params]
-        values = [p[1] for p in params]
+        values = [float(p[1]) for p in params]
         try:
             req = self._vts.vts_request.requestSetMultiParameterValue(
                 parameters=names,
@@ -122,6 +178,7 @@ class VTSClient:
                 mode="set",
             )
             await self._vts.request(req)
+            logger.info("VTS 포즈 적용: %s (파라미터 %d개)", emotion, len(params))
             return True
         except Exception as e:
             logger.warning("VTS 파라미터 주입 실패: %s", e)

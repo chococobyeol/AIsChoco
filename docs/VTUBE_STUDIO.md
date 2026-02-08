@@ -73,7 +73,52 @@ copy config\pose_mapping.json.example config\pose_mapping.json
 ## 3. 동작 흐름
 
 1. 채팅 수신 → Groq에서 **답변 + 감정** 수신.
-2. **VTS**: `set_emotion(emotion)` 호출 → `pose_mapping.json`에서 해당 감정의 파라미터 값을 읽어 **InjectParameterDataRequest**로 전송.
+2. **VTS**: `set_emotion(emotion)` 호출 → `pose_mapping.json` 값을 **VTS 입력 파라미터**에 넣음(InjectParameterDataRequest).
 3. **TTS**: 같은 답변을 음성으로 합성 후 저장·재생.
 
 포즈는 감정이 정해지는 시점에 바로 적용되고, 그 다음 TTS가 재생됩니다.
+
+---
+
+## 4. 입력 파라미터로 보내기 (필수 설정)
+
+VTS API는 **Live2D(출력) 파라미터에 직접 값을 넣지 않습니다.**  
+값을 넣는 대상은 **입력(INPUT) 파라미터**뿐입니다.  
+([공식 API](https://github.com/DenchiSoft/VTubeStudio) – "Feeding in data for default or custom parameters")
+
+이 프로젝트는 다음처럼 동작합니다.
+
+- **기본 입력**: FaceAngleX, FaceAngleY, FaceAngleZ, EyeOpenLeft, EyeOpenRight, MouthOpen, BrowLeftY, BrowRightY 에 값을 전송.
+- **커스텀 입력**: AIsChocoBodyY, AIsChocoBodyZ, AIsChocoBreath, AIsChocoBrowLAngle, AIsChocoBrowRAngle, AIsChocoLegR, AIsChocoLegL 은 스크립트 연결 시 자동 생성 후 여기에 값을 전송.
+
+따라서 **모델 설정에서 "입력 → Live2D(출력)" 매핑**을 해 줘야 포즈가 보입니다.
+
+### 모델 설정에서 할 일
+
+1. **VTS** → **모델 설정** 탭 → **VTS Parameter Setup**(파라미터 설정).
+2. **INPUT**으로 아래 이름들을 선택하고, 각각 원하는 **OUTPUT(Live2D 파라미터)** 에 매핑합니다.
+
+| 우리가 보내는 입력 (INPUT) | 예시 매핑 대상 (OUTPUT) |
+|---------------------------|--------------------------|
+| FaceAngleX, FaceAngleY, FaceAngleZ | ParamAngleX, ParamAngleY, ParamAngleZ |
+| EyeOpenLeft, EyeOpenRight | ParamEyeLOpen, ParamEyeROpen |
+| BrowLeftY, BrowRightY | ParamBrowLY, ParamBrowRY |
+| AIsChocoBrowLAngle, AIsChocoBrowRAngle | ParamBrowLAngle, ParamBrowRAngle |
+| MouthOpen | ParamMouthOpenY |
+| AIsChocoBodyY, AIsChocoBodyZ | ParamBodyAngleY, ParamBodyAngleZ |
+| AIsChocoBreath | ParamBreath |
+| AIsChocoLegR, AIsChocoLegL | ParamRightLeg, ParamLeftLeg |
+
+3. **플러그인 포즈만 쓰고 싶을 때**: 위 입력들은 우리 스크립트가 제어하므로, 해당 OUTPUT에는 **다른 입력(얼굴 트래킹 등)을 매핑하지 않으면** 됩니다.  
+   **얼굴 트래킹과 같이 쓰고 싶을 때**: 같은 OUTPUT에 FaceAngleX와 트래킹을 둘 다 쓰면 안 되고, 포즈용 OUTPUT에는 위 입력만 매핑하고, 나머지 OUTPUT에는 트래킹만 매핑하는 식으로 나누면 됩니다.
+
+연결 후 플러그인 설정 화면에 **사용자 지정 파라미터: 7**처럼 표시되면 커스텀 입력이 생성된 것입니다.
+
+---
+
+## 5. 포즈가 안 바뀔 때
+
+- **입력 → 출력 매핑 확인**: 위 표대로 모델 설정에서 INPUT을 OUTPUT에 매핑했는지 확인하세요.
+- **1초마다 재전송**: VTS는 "플러그인이 제어하는 파라미터는 **최소 1초에 한 번** 값을 보내야 한다"고 합니다. 감정이 바뀔 때만 보내면 1초 지나면 다시 트래킹 등으로 돌아갈 수 있으니, 포즈를 유지하려면 주기적으로 같은 값을 다시 보내는 방식이 필요할 수 있습니다.
+
+공식 문서: [VTS Model Settings](https://github.com/DenchiSoft/VTubeStudio/wiki/VTS-Model-Settings), [Plugins / Custom Parameters](https://github.com/DenchiSoft/VTubeStudio/wiki/Plugins)
