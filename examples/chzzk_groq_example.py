@@ -9,6 +9,7 @@
 - 대화 히스토리(토큰 기반 + 요약 + RAG용 백업)를 유지합니다.
 립싱크: .env에 TTS_OUTPUT_DEVICE=VB-Audio Virtual Cable 등으로 TTS 출력을 가상 케이블로 두고, VTS 오디오 입력을 해당 장치로 설정.
 Colab TTS: .env에 TTS_REMOTE_URL=https://xxx.ngrok-free.app 설정 시 TTS를 Colab에서 원격 실행. docs/COLAB_TTS.md 참고.
+수동 백업: history/DO_BACKUP 파일을 만들면 다음 채팅 처리 시점에 history/backups/ 에 타임스탬프 백업 후 삭제됩니다.
 """
 
 import asyncio
@@ -56,8 +57,16 @@ async def reply_worker(
     4) 해당 답변: 히스토리에 assistant 추가 → TTS+재생 → VTS 감정
     5) flush_summary 한 번 더 후 반복
     """
+    root = Path(__file__).resolve().parent.parent
+    backup_trigger = root / "history" / "DO_BACKUP"
     while True:
         try:
+            if backup_trigger.exists():
+                try:
+                    chat_history.save_manual_backup()
+                    backup_trigger.unlink()
+                except Exception as be:
+                    logger.warning("수동 백업 실패: %s", be)
             first = await queue.get()
             pending: List[ChatMessage] = [first]
             while True:
@@ -77,6 +86,8 @@ async def reply_worker(
             replies = await asyncio.to_thread(
                 groq_client.reply_batch, pending, context
             )
+            if not replies:
+                logger.info("답변 없음 (모델이 replies 빈 배열 반환 또는 파싱 실패)")
 
             for ai_response in replies:
                 if not (ai_response.response or "").strip():

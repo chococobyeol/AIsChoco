@@ -1,12 +1,13 @@
 """
 채팅 히스토리 관리 (PRD 4.5.2, 6.2.1)
-토큰 기반 슬라이딩 윈도우 + 요약 + RAG용 주기적 백업.
+토큰 기반 슬라이딩 윈도우 + 요약 + RAG용 주기적 백업 + 수동 백업.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, List, Optional, TYPE_CHECKING
 
@@ -15,9 +16,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 12K 컨텍스트 가정: 최근 7K 토큰 유지, 10K 도달 시 요약
-DEFAULT_MAX_TOKENS = 7000
-DEFAULT_SUMMARY_THRESHOLD = 10000
+# 8K 제한: 최근 5K 유지, 7K 도달 시 요약
+DEFAULT_MAX_TOKENS = 5000
+DEFAULT_SUMMARY_THRESHOLD = 7000
 DEFAULT_SUMMARY_TOKENS = 2000  # 요약 시 잘라낼 오래된 분량
 
 
@@ -52,15 +53,17 @@ class ChatHistory:
         summary_file: str = "summary.json",
         summaries_dir: str = "summaries",
     ):
-        self.max_tokens = max_tokens
-        self.summary_threshold = summary_threshold
-        self.summary_tokens = summary_tokens
+        self.max_tokens = int(os.environ.get("CHAT_HISTORY_MAX_TOKENS") or max_tokens)
+        self.summary_threshold = int(os.environ.get("CHAT_HISTORY_SUMMARY_THRESHOLD") or summary_threshold)
+        self.summary_tokens = int(os.environ.get("CHAT_HISTORY_SUMMARY_TOKENS") or summary_tokens)
         root = history_dir or (_project_root() / "history")
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.summary_path = self.root / summary_file
         self.summaries_dir = self.root / summaries_dir
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
+        self.backups_dir = self.root / "backups"
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
 
         self.recent_messages: List[dict] = []  # {"role": "user"|"assistant", "content": "..."}
         self._current_tokens = 0
@@ -160,3 +163,22 @@ class ChatHistory:
 
     def has_pending_summarize(self) -> bool:
         return getattr(self, "_pending_summarize", None) is not None
+
+    def save_manual_backup(self) -> Path:
+        """
+        현재 요약 + 최근 대화 전체를 타임스탬프 파일로 저장 (수동 백업).
+        history/backups/backup_YYYYMMDD_HHMMSS.json
+        """
+        from datetime import datetime
+        name = f"backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+        path = self.backups_dir / name
+        data = {
+            "summary": self.summary_content,
+            "messages": self.recent_messages,
+            "message_count": len(self.recent_messages),
+            "current_tokens_approx": self._current_tokens,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=0), encoding="utf-8")
+        logger.info("수동 백업 저장: %s", path)
+        return path

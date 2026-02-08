@@ -34,7 +34,8 @@ def _load_character_prompt(character_path: Optional[Path] = None) -> str:
         return ""
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+# openai/gpt-oss-120b: 131K context, 8K 분당 등 제한에 맞춰 .env GROQ_MODEL 로 변경 가능
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 SYSTEM_PROMPT = """시청자 채팅에 한 문장으로 짧게 한국어로 답하세요.
 반드시 아래 JSON만 출력하세요. 따옴표나 줄바꿈 없이 한 줄로 작성하세요.
@@ -42,9 +43,10 @@ SYSTEM_PROMPT = """시청자 채팅에 한 문장으로 짧게 한국어로 답�
 emotion은 반드시 다음 중 하나: happy, sad, angry, surprised, neutral, excited."""
 
 BATCH_SYSTEM_PROMPT = """아래는 말하는 동안 들어온 채팅 목록입니다.
-도배·스팸·쓸데없는 채팅은 무시하고, 채팅들을 종합해서 답변 하나만 생성하세요. 한 문장이 길어도 됩니다.
-답할 게 없으면 replies를 빈 배열로 두세요.
-반드시 아래 JSON만 출력하세요 (한 줄): {"replies": [{"response": "한 문장(길어도 됨)", "emotion": "감정키"}]}
+도배·스팸만 무시하고, 채팅이 있으면 반드시 답변 하나 생성하세요. 짧은 한마디(예: 그냥 알아, ㅇㅇ)에도 한 문장으로 응답하세요.
+정말 답할 수 없는 경우에만 replies를 빈 배열로 두세요.
+설명·생각·추론 없이, 아래 형식의 JSON 한 줄만 출력하세요.
+{"replies": [{"response": "한 문장(길어도 됨)", "emotion": "감정키"}]}
 replies는 최대 1개. emotion은 반드시: happy, sad, angry, surprised, neutral, excited 중 하나."""
 
 SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. 중요한 맥락과 주제는 유지하세요. 한국어로 한 문단 이내."""
@@ -63,7 +65,8 @@ class GroqClient:
         self.api_key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
         if not self.api_key:
             raise ValueError("GROQ_API_KEY가 설정되지 않았습니다. .env 또는 인자로 전달하세요.")
-        self.model = model
+        _model = (model or "").strip()
+        self.model = _model or (os.environ.get("GROQ_MODEL") or "").strip() or DEFAULT_MODEL
         self.max_tokens = max_tokens
         self._character_prompt = _load_character_prompt(character_path)
         if self._character_prompt:
@@ -206,7 +209,7 @@ class GroqClient:
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=512,
+                max_tokens=1024,
                 response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content
@@ -221,7 +224,14 @@ class GroqClient:
                 text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
             if text.endswith("```"):
                 text = text.rsplit("```", 1)[0].strip()
-            data = json.loads(text)
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                beg, end = text.find("{"), text.rfind("}")
+                if beg != -1 and end > beg:
+                    data = json.loads(text[beg : end + 1])
+                else:
+                    raise
             arr = data.get("replies") if isinstance(data, dict) else data
             if not isinstance(arr, list):
                 arr = []
