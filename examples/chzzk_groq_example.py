@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -138,6 +139,7 @@ async def reply_worker(
                     continue
                 overlay_state.setdefault("assistant_messages", []).append({
                     "message": str(ai_response.response or ""),
+                    "ts": time.time(),
                 })
                 a_msgs = overlay_state.get("assistant_messages") or []
                 if len(a_msgs) > MAX_ASSISTANT_MESSAGES:
@@ -220,6 +222,7 @@ async def main():
             "user": str(getattr(msg, "user", None) or "?"),
             "message": str(getattr(msg, "message", None) or ""),
             "processed": False,
+            "ts": time.time(),
         })
         if len(viewer_list) > MAX_VIEWER_MESSAGES:
             overlay_state["viewer_messages"] = viewer_list[-MAX_VIEWER_MESSAGES:]

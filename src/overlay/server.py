@@ -19,7 +19,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
 )
 
 
@@ -30,6 +30,16 @@ def get_state():
     assistant = list(overlay_state.get("assistant_messages") or [])
     logger.info("Overlay API: viewer=%d assistant=%d", len(viewer), len(assistant))
     return JSONResponse({"viewer_messages": viewer, "assistant_messages": assistant})
+
+
+@app.post("/api/clear")
+def clear_chat():
+    """채팅/답변 오버레이 수동 클리어."""
+    overlay_state["viewer_messages"] = []
+    overlay_state["assistant_messages"] = []
+    overlay_state["_next_id"] = 0
+    logger.info("Overlay API: clear")
+    return JSONResponse({"ok": True})
 
 
 OVERLAY_HTML = """<!DOCTYPE html>
@@ -111,9 +121,23 @@ OVERLAY_HTML = """<!DOCTYPE html>
     }
     .row.assistant.previous .text { color: #64748b; }
     .empty { opacity: 0.7; font-size: 12px; padding: 6px 0; color: #64748b; }
+    .btn-clear {
+      position: fixed;
+      bottom: 8px;
+      right: 8px;
+      padding: 4px 10px;
+      font-size: 12px;
+      border-radius: 6px;
+      border: 1px solid #94a3b8;
+      background: rgba(255,255,255,0.9);
+      color: #475569;
+      cursor: pointer;
+    }
+    .btn-clear:hover { background: #f1f5f9; }
   </style>
 </head>
 <body>
+  <button type="button" class="btn-clear" id="btn-clear">클리어</button>
   <div class="col">
     <div class="col-content" id="assistant-col"></div>
   </div>
@@ -127,13 +151,29 @@ OVERLAY_HTML = """<!DOCTYPE html>
       div.textContent = String(s);
       return div.innerHTML;
     }
+    var MAX_AGE = 600;
+    var FADE_START = 480;
+    function opacityForAge(ts) {
+      if (ts == null) return 1;
+      var age = (Date.now() / 1000) - ts;
+      if (age <= FADE_START) return 1;
+      if (age >= MAX_AGE) return 0;
+      return 1 - (age - FADE_START) / (MAX_AGE - FADE_START);
+    }
     function render() {
       var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
       fetch(base + "/api/state")
         .then(function(r) { return r.json(); })
         .then(function(data) {
-          var viewerList = data.viewer_messages || [];
-          var assistantList = data.assistant_messages || [];
+          var now = Date.now() / 1000;
+          var viewerList = (data.viewer_messages || []).filter(function(item) {
+            var age = now - (item.ts != null ? item.ts : now);
+            return age <= MAX_AGE;
+          });
+          var assistantList = (data.assistant_messages || []).filter(function(item) {
+            var age = now - (item.ts != null ? item.ts : now);
+            return age <= MAX_AGE;
+          });
           var vEl = document.getElementById("viewer-col");
           var aEl = document.getElementById("assistant-col");
           vEl.innerHTML = viewerList.length === 0
@@ -142,14 +182,16 @@ OVERLAY_HTML = """<!DOCTYPE html>
                 var cls = "row viewer" + (item.processed ? " processed" : "");
                 var user = escapeHtml(item.user || "?");
                 var msg = escapeHtml(item.message || "");
-                return '<div class="' + cls + '"><div class="name">' + user + '</div><div class="text">' + msg + '</div></div>';
+                var op = opacityForAge(item.ts);
+                return '<div class="' + cls + '" style="opacity:' + op + '"><div class="name">' + user + '</div><div class="text">' + msg + '</div></div>';
               }).join("") + '</div>';
           aEl.innerHTML = assistantList.length === 0
             ? '<div class="empty">(대기 중)</div>'
             : '<div class="inner">' + assistantList.map(function(item, i) {
                 var msg = escapeHtml(item.message || "");
                 var prev = i < assistantList.length - 1 ? " previous" : "";
-                return '<div class="row assistant' + prev + '"><div class="text">' + msg + '</div></div>';
+                var op = opacityForAge(item.ts);
+                return '<div class="row assistant' + prev + '" style="opacity:' + op + '"><div class="text">' + msg + '</div></div>';
               }).join("") + '</div>';
           vEl.scrollTop = vEl.scrollHeight;
           aEl.scrollTop = aEl.scrollHeight;
@@ -159,6 +201,10 @@ OVERLAY_HTML = """<!DOCTYPE html>
           document.getElementById("assistant-col").innerHTML = '';
         });
     }
+    document.getElementById("btn-clear").onclick = function() {
+      var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
+      fetch(base + "/api/clear", { method: "POST" }).then(function() { render(); });
+    };
     render();
     setInterval(render, 500);
   </script>

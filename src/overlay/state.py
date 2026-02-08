@@ -3,9 +3,9 @@
 from typing import Any
 
 # 시청자 채팅: 들어오자마자 추가, 처리되면 processed=True
-# [{ "id": int, "user": str, "message": str, "processed": bool }, ...]
-# AI 답변: 답변 생성 시 추가
-# [{ "message": str }, ...]
+# [{ "id": int, "user": str, "message": str, "processed": bool, "ts": float }, ...]
+# AI 답변: 답변 생성 시 추가 (ts 기준 10분 지나면 오버레이에서 페이드아웃)
+# [{ "message": str, "ts": float }, ...]
 overlay_state: dict[str, Any] = {
     "viewer_messages": [],
     "assistant_messages": [],
