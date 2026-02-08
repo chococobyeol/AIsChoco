@@ -8,6 +8,7 @@
 - Groq가 도배/스팸을 걸러내고 비슷한 내용을 묶어 답변 1개만 생성합니다 (한 문장이 길어도 됨).
 - 대화 히스토리(토큰 기반 + 요약 + RAG용 백업)를 유지합니다.
 립싱크: .env에 TTS_OUTPUT_DEVICE=VB-Audio Virtual Cable 등으로 TTS 출력을 가상 케이블로 두고, VTS 오디오 입력을 해당 장치로 설정.
+Colab TTS: .env에 TTS_REMOTE_URL=https://xxx.ngrok-free.app 설정 시 TTS를 Colab에서 원격 실행. docs/COLAB_TTS.md 참고.
 """
 
 import asyncio

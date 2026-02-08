@@ -7,6 +7,7 @@ Qwen3-TTS Base 클로닝 래퍼. ref.wav(및 감정별 ref_emotion.wav)로 목�
 
 from __future__ import annotations
 
+import io
 import os
 import logging
 from pathlib import Path
@@ -59,6 +60,7 @@ class TTSService:
         language: str = "Korean",
         hf_home: Optional[Union[Path, str]] = None,
         play_device: Optional[Union[int, str]] = None,
+        tts_remote_url: Optional[str] = None,
     ):
         """
         model_size: "0.6B"(경량, VRAM 약 2GB) 또는 "1.7B"(품질·끝발음 개선, VRAM 약 4GB).
@@ -67,7 +69,12 @@ class TTSService:
                  미지정 시 .env의 HF_HOME 또는 프로젝트/cache/huggingface 사용.
         play_device: TTS 재생 출력 장치. VB-Cable 등으로 지정하면 VTS 립싱크 가능.
                      정수(장치 인덱스) 또는 문자열(장치 이름). .env TTS_OUTPUT_DEVICE 사용 가능.
+        tts_remote_url: Colab 등 원격 TTS API URL. 지정 시 로컬 모델 대신 원격 호출. .env TTS_REMOTE_URL 사용 가능.
         """
+        _env_url = (os.environ.get("TTS_REMOTE_URL") or "").strip() or None
+        self.tts_remote_url = (tts_remote_url or _env_url or "").rstrip("/") or None
+        if self.tts_remote_url:
+            logger.info("TTS 원격 API 사용: %s", self.tts_remote_url)
         self.ref_audio_dir = Path(ref_audio_dir) if ref_audio_dir else _default_ref_dir()
         _env_device = (os.environ.get("TTS_OUTPUT_DEVICE") or "").strip() or None
         self.play_device = play_device if play_device is not None else _env_device
@@ -139,6 +146,29 @@ class TTSService:
         self._model = Qwen3TTSModel.from_pretrained(self.model_id, **load_kwargs)
         return self._model
 
+    def _synthesize_remote(self, text: str, emotion: str = "neutral") -> Tuple[list, int]:
+        """원격 TTS API 호출 (Colab 등)."""
+        import httpx
+        import numpy as np
+        import soundfile as sf
+
+        url = f"{self.tts_remote_url.rstrip('/')}/synthesize"
+        # 첫 실행 시 Colab에서 모델/라이브러리 설치로 지연되므로 타임아웃 5분
+        timeout = float(os.environ.get("TTS_REMOTE_TIMEOUT", "300"))
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.post(url, json={"text": text, "emotion": emotion})
+                resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.warning("원격 TTS 실패 %s: %s", e.response.status_code, e.response.text[:200])
+            return [np.array([], dtype=np.float32)], 24000
+        except Exception as e:
+            logger.warning("원격 TTS 호출 실패: %s", e)
+            return [np.array([], dtype=np.float32)], 24000
+
+        data, sr = sf.read(io.BytesIO(resp.content), dtype="float32")
+        return [data], int(sr)
+
     def synthesize(
         self,
         text: str,
@@ -146,14 +176,20 @@ class TTSService:
         language: Optional[str] = None,
     ) -> Tuple[list, int]:
         """
-        텍스트를 클론 목소리로 변환. 감정에 따라 ref_emotion.wav 또는 ref.wav 사용.
-
+        텍스트를 클론 목소리로 변환. tts_remote_url 있으면 원격 API 호출, 없으면 로컬 모델 사용.
         Returns:
             (wavs, sample_rate): wavs[0]이 numpy 배열, sample_rate는 int.
         """
         if not text.strip():
             import numpy as np
             return [np.array([], dtype=np.float32)], 24000
+
+        if self.tts_remote_url:
+            wavs, sr = self._synthesize_remote(text.strip(), emotion)
+            if wavs and len(wavs[0]) > 0:
+                return wavs, sr
+            logger.warning("원격 TTS 실패, 로컬로 전환합니다.")
+            # 세션 끊김 등으로 실패 시 로컬 폴백
 
         ref_path = self._resolve_ref_audio(emotion)
         if not ref_path.exists():
