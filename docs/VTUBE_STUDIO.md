@@ -54,7 +54,19 @@ copy config\pose_mapping.json.example config\pose_mapping.json
 | **emotions** | happy, sad, angry, surprised, neutral, excited 등 감정 키 → 그 감정일 때 쓸 파라미터 이름·값 딕셔너리. |
 | **default** | 매칭되는 감정이 없을 때 쓸 감정. |
 
-값은 보통 **-1 ~ 1** 또는 모델/파라미터별 범위를 따릅니다. VTS에서 해당 파라미터의 min/max를 확인해 조정하면 됩니다.
+### 파라미터 값 범위 (참고)
+
+모델마다 다를 수 있으며, 아래는 기본 예시 모델 기준입니다. VTS **모델 설정 → 파라미터**에서 min/max를 확인해 조정하세요.
+
+| 구분 | 파라미터 예시 | 범위 |
+|------|----------------|------|
+| 얼굴 각도 | ParamAngleX, ParamAngleY, ParamAngleZ | -30 ~ 30 |
+| 몸 회전 | ParamBodyAngleY, ParamBodyAngleZ | -10 ~ 10 |
+| 다리 | ParamRightLeg, ParamLeftLeg | -30 ~ 30 |
+| 눈 열림 | ParamEyeLOpen, ParamEyeROpen | -1 ~ 1 |
+| 눈썹/눈 각도 | ParamBrowLY, ParamBrowRY, ParamBrowLAngle, ParamBrowRAngle | -1 ~ 1 |
+| 입 벌림 | ParamMouthOpenY | 0 ~ 1 |
+| 호흡 | ParamBreath | 0 ~ 1 |
 
 ---
 
