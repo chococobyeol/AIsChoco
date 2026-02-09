@@ -25,11 +25,24 @@ app.add_middleware(
 
 @app.get("/api/state")
 def get_state():
-    """오버레이: 시청자 채팅 컬럼 / AI 답변 컬럼 각각 반환."""
+    """오버레이: 시청자 채팅 컬럼 / AI 답변 컬럼, 방장채팅 숨김 설정 반환."""
     viewer = list(overlay_state.get("viewer_messages") or [])
     assistant = list(overlay_state.get("assistant_messages") or [])
-    logger.info("Overlay API: viewer=%d assistant=%d", len(viewer), len(assistant))
-    return JSONResponse({"viewer_messages": viewer, "assistant_messages": assistant})
+    ignore = bool(overlay_state.get("ignore_streamer_chat"))
+    return JSONResponse({
+        "viewer_messages": viewer,
+        "assistant_messages": assistant,
+        "ignore_streamer_chat": ignore,
+    })
+
+
+@app.post("/api/toggle_streamer_chat")
+def toggle_streamer_chat():
+    """방장 채팅 무시 토글. ON이면 방장 채팅 미표시·AI 미반응."""
+    cur = bool(overlay_state.get("ignore_streamer_chat"))
+    overlay_state["ignore_streamer_chat"] = not cur
+    logger.info("Overlay API: ignore_streamer_chat=%s", overlay_state["ignore_streamer_chat"])
+    return JSONResponse({"ignore_streamer_chat": overlay_state["ignore_streamer_chat"]})
 
 
 @app.post("/api/clear")
@@ -134,9 +147,24 @@ OVERLAY_HTML = """<!DOCTYPE html>
       cursor: pointer;
     }
     .btn-clear:hover { background: #f1f5f9; }
+    .btn-streamer {
+      position: fixed;
+      bottom: 8px;
+      right: 72px;
+      padding: 4px 10px;
+      font-size: 12px;
+      border-radius: 6px;
+      border: 1px solid #94a3b8;
+      background: rgba(255,255,255,0.9);
+      color: #475569;
+      cursor: pointer;
+    }
+    .btn-streamer:hover { background: #f1f5f9; }
+    .btn-streamer.on { background: #e2e8f0; font-weight: 600; }
   </style>
 </head>
 <body>
+  <button type="button" class="btn-streamer" id="btn-streamer">방장 숨김: OFF</button>
   <button type="button" class="btn-clear" id="btn-clear">클리어</button>
   <div class="col">
     <div class="col-content" id="assistant-col"></div>
@@ -165,6 +193,12 @@ OVERLAY_HTML = """<!DOCTYPE html>
       fetch(base + "/api/state")
         .then(function(r) { return r.json(); })
         .then(function(data) {
+          var ignore = data.ignore_streamer_chat || false;
+          var btn = document.getElementById("btn-streamer");
+          if (btn) {
+            btn.textContent = ignore ? "방장 숨김: ON" : "방장 숨김: OFF";
+            btn.className = "btn-streamer" + (ignore ? " on" : "");
+          }
           var now = Date.now() / 1000;
           var viewerList = (data.viewer_messages || []).filter(function(item) {
             var age = now - (item.ts != null ? item.ts : now);
@@ -204,6 +238,10 @@ OVERLAY_HTML = """<!DOCTYPE html>
     document.getElementById("btn-clear").onclick = function() {
       var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
       fetch(base + "/api/clear", { method: "POST" }).then(function() { render(); });
+    };
+    document.getElementById("btn-streamer").onclick = function() {
+      var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
+      fetch(base + "/api/toggle_streamer_chat", { method: "POST" }).then(function() { render(); });
     };
     render();
     setInterval(render, 500);

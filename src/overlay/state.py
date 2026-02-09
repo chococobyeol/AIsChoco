@@ -10,6 +10,7 @@ overlay_state: dict[str, Any] = {
     "viewer_messages": [],
     "assistant_messages": [],
     "_next_id": 0,
+    "ignore_streamer_chat": False,  # True면 방장 채팅 무시: 오버레이 미표시, AI 미반응
 }
 MAX_VIEWER_MESSAGES = 50
 MAX_ASSISTANT_MESSAGES = 50

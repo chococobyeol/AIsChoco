@@ -55,7 +55,7 @@ class TTSService:
         self,
         ref_audio_dir: Optional[Union[Path, str]] = None,
         ref_text: Optional[str] = None,
-        model_size: str = "1.7B",
+        model_size: str = "0.6B",
         model_id: Optional[str] = None,
         language: str = "Korean",
         hf_home: Optional[Union[Path, str]] = None,

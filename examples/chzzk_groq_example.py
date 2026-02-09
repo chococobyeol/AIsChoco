@@ -284,7 +284,14 @@ async def main():
     if vts_client:
         idle_task = asyncio.create_task(idle_worker(vts_client, is_speaking))
 
+    def _is_streamer(m: ChatMessage, ch_id: str) -> bool:
+        """방장(스트리머) 여부: 발신자 채널 ID == 방송 채널 ID"""
+        uid = getattr(m, "user_id", None) or ""
+        return bool(uid and ch_id and str(uid) == str(ch_id))
+
     def on_message(msg: ChatMessage):
+        if overlay_state.get("ignore_streamer_chat") and _is_streamer(msg, channel_id):
+            return
         viewer_list = overlay_state.setdefault("viewer_messages", [])
         next_id = overlay_state.get("_next_id", 0) + 1
         overlay_state["_next_id"] = next_id
