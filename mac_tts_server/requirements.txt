@@ -1,0 +1,5 @@
+# Mac TTS API 서버 (Qwen3-TTS MLX). macOS Apple Silicon 전용.
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+# mlx-audio: qwen3-tts-apple-silicon과 동일한 커밋 사용
+mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@9349644ccbd62eb10900852228f7b952c566def3
