@@ -17,9 +17,10 @@
 ### 1.2 프로젝트 범위
 - 치지직 Socket.IO API를 통한 실시간 채팅 수집
 - Groq API를 활용한 고속 텍스트 생성 및 감정 분석
-- 로컬 Qwen3-TTS 모델을 통한 저지연 음성 합성
+- 로컬 또는 원격 Qwen3-TTS를 통한 음성 합성 (원격 시 TTS_REMOTE_URL)
 - VTube Studio API를 통한 실시간 캐릭터 제어
 - 멀티모달 반응 시스템 (표정, 포즈, 립싱크)
+- 방송 오버레이: OBS 브라우저 소스용 시청자 채팅 / AI 답변 표시 (클리어·방장 채팅 숨김 토글)
 
 ### 1.3 목표 사용자
 - 치지직 스트리머
@@ -102,7 +103,7 @@
 | **의존성 관리** | requirements.txt | Python 패키지 관리 |
 | **환경 변수** | .env | API 키 및 설정 관리 |
 | **로깅** | logging | 시스템 로그 관리 |
-| **설정 관리** | config.yaml / config.json | 시스템 설정 파일 |
+| **설정 관리** | .env, config/character.txt, pose_mapping.json, vts_token.txt | config.yaml.example은 참고용 |
 
 ---
 
@@ -114,7 +115,8 @@
 - **기본 모델**: `Qwen3-TTS-12Hz-1.7B-Base`
 - **대체 모델**: `Qwen3-TTS-12Hz-0.6B-Base` (GPU 메모리 부족 시)
 - **모델 다운로드**: Hugging Face 또는 공식 저장소에서 자동/수동 다운로드
-- **모델 경로**: `models/qwen3-tts/` 디렉토리에 저장
+- **모델 경로 (로컬 TTS)**: Hugging Face 캐시 사용. `.env`의 `HF_HOME` 또는 프로젝트 `cache/huggingface`에 qwen-tts 패키지가 자동 다운로드. 수동 지정 시 해당 경로에 모델 배치.
+- **원격 TTS**: `TTS_REMOTE_URL` 설정 시 Colab 또는 맥(Apple Silicon) TTS API 서버 사용 가능. 로컬 GPU 불필요. (mac_tts_server 참고)
 
 #### 4.1.2 성능 최적화
 - **FlashAttention 설치**: 추론 속도 극대화
@@ -148,38 +150,22 @@
 - **용도**: Groq에서 수신된 `emotion` 값은 포즈 제어 로직의 입력으로만 사용
 - **주의사항**: 모델에 감정 표현(표정) 기능이 없으므로, 감정은 포즈 파라미터 계산에만 활용
 
-#### 4.2.2 포즈 제어 시스템 (별도 모듈)
+#### 4.2.2 포즈 제어 시스템
 - **목적**: AI 응답의 감정과 내용에 맞춰 캐릭터의 포즈를 파라미터로 직접 제어
 - **제어 방식**: VTS API의 `InjectParameterDataRequest`를 통한 실시간 파라미터 주입
-- **모듈 분리**: `pose_controller.py`로 별도 구현 (독립적인 모듈)
+- **현재 구현**: `src/vtuber/vts_client.py`에서 감정→파라미터 계산 및 VTS 전송을 통합. `config/pose_mapping.json`에 감정별 기본 포즈 값 정의. 별도 `pose_controller.py`/`parameter_controller.py` 파일은 없음.
 - **입력 데이터**:
   - `emotion`: Groq에서 생성된 감정 타입 (string)
-  - `response_text`: AI 응답 텍스트 (string)
-  - `timestamp`: 현재 시간 (datetime)
-- **출력 데이터**: 계산된 파라미터 딕셔너리 (Dict[str, float])
-- **주요 파라미터**:
-  - `ParamBodyAngleZ`: 신체 좌우 각도 (-1.0 ~ 1.0)
-  - `ParamAngleX`: 머리 상하 각도 (-1.0 ~ 1.0)
-  - `ParamAngleY`: 머리 좌우 각도 (-1.0 ~ 1.0)
-  - `ParamEyeOpenLeft/Right`: 눈 깜빡임 (0.0 ~ 1.0)
-  - `ParamMouthOpenY`: 입 벌림 (0.0 ~ 1.0, 립싱크용)
+  - (선택) 응답 텍스트·타임스탬프 기반 미세 조정
+- **주요 파라미터**: pose_mapping.json의 키를 VTS 입력 파라미터(MousePositionX/Y, AIsChocoBrowLAngle 등)에 매핑
 - **포즈 계산 로직**:
-  1. **감정 기반 기본 포즈**: 감정 타입에 따른 기본 파라미터 값 매핑 (설정 파일 기반)
-  2. **텍스트 분석**: 응답 텍스트의 키워드/의미 분석을 통한 미세 조정
-     - 질문 키워드 → 고개 살짝 기울임
-     - 감탄사 → 고개 위로 살짝 올림
-     - 긍정/부정 단어 → 신체 각도 조정
-  3. **Idle 애니메이션**: 응답이 없을 때 자연스러운 미세 움직임
-  4. **랜덤 요소**: 완전히 동일한 감정이라도 약간의 랜덤성 추가
-- **설정 파일**: `config/pose_mapping.json`에 감정별 기본 포즈 값 정의
-- **제어 주기**: 30~60 FPS 업데이트
-- **모듈 책임**:
-  - 파라미터 계산만 담당 (전송은 `parameter_controller.py`가 담당)
-  - 보간 알고리즘과 독립적으로 동작
-  - 테스트 가능한 순수 함수 형태로 구현 권장
+  1. **감정 기반 기본 포즈**: pose_mapping.json에 따른 감정별 파라미터 값 (구현됨)
+  2. **Idle 애니메이션**: 응답이 없을 때 자연스러운 미세 움직임 (구현됨: 예제의 idle_worker에서 마우스 좌우 이동·다리 주기 동작, 말하기 중에는 미동작)
+  3. **랜덤 요소**: Idle 구간에서 주기·값에 랜덤 보정 적용 (구현됨)
+- **설정 파일**: `config/pose_mapping.json`
 
 #### 4.2.3 실시간 파라미터 제어
-- **기능**: 포즈 제어 모듈에서 계산된 파라미터 값을 VTS API로 전송
+- **기능**: vts_client에서 계산된 파라미터 값을 VTS API로 전송
 - **전송 방식**: WebSocket을 통한 `InjectParameterDataRequest`
 - **값 범위**: -1.0 ~ 1.0 (VTS 표준)
 - **에러 핸들링**: 파라미터 값 유효성 검증 및 범위 제한
@@ -187,9 +173,8 @@
 #### 4.2.4 보간 알고리즘
 - **알고리즘**: 선형 보간(Lerp)
 - **보간 시간**: 0.1~0.5초 (파라미터별 조정 가능)
-- **보간 함수**: `lerp(start, end, t)` where `t ∈ [0, 1]`
 - **목적**: 순간 이동 방지 및 부드러운 움직임 구현
-- **적용 범위**: 모든 포즈 파라미터 전환 시 적용
+- **현재 구현**: 시선 복귀(`_animate_look_back_to_center`)에서만 스텝별 보간 적용. 감정/포즈 전환은 즉시 주입. 전역 Lerp(모든 파라미터 전환 시 0.1~0.5초 보간)는 미적용.
 
 ### 4.3 입모양(Lip-sync) 동기화
 
@@ -412,21 +397,17 @@
 
 ### 5.1 전체 구조도
 ```
-[치지직 Socket.IO] 
+[치지직 Socket.IO]
     ↓
-[채팅 수집 모듈] → [채팅 필터링] → [채팅 큐]
+[채팅 수집 모듈] → [채팅 큐] ──────────────────→ [오버레이 상태] → [OBS 브라우저 소스]
     ↓
 [Groq API 클라이언트] → [LLM 추론] → [응답 파싱]
     ↓                                    ↓
-[응답 큐]                    [감정/응답 파싱]
+[응답 큐]                    [감정/응답] → [vts_client 포즈·아이들]
     ↓                                    ↓
-[Qwen3-TTS 엔진]              [포즈 제어 모듈]
+[Qwen3-TTS (로컬/원격)]      [VTS API 파라미터 주입]
     ↓                                    ↓
-[VB-Cable 오디오 출력]        [파라미터 계산]
-    ↓                                    ↓
-[VTS 립싱크]                  [VTS API 클라이언트]
-    ↓                                    ↓
-[OBS 송출]                    [파라미터 주입]
+[VB-Cable 오디오 출력]        [VTS 립싱크]
     ↓
 [OBS 송출]
 ```
@@ -437,50 +418,56 @@ aischoco/
 ├── src/
 │   ├── chat/
 │   │   ├── chzzk_client.py      # 치지직 Socket.IO 클라이언트
-│   │   ├── chat_parser.py        # 채팅 파싱 및 필터링
+│   │   ├── chat_parser.py       # 채팅 파싱 및 필터링
 │   │   ├── base_client.py, client_factory.py
 │   │   └── (chat_history는 ai/ 에 있음)
 │   ├── ai/
-│   │   ├── groq_client.py        # Groq API 클라이언트 (응답 파싱 포함)
-│   │   ├── chat_history.py       # 채팅 히스토리 (토큰 기반 슬라이딩 윈도우 + 요약)
+│   │   ├── groq_client.py       # Groq API 클라이언트 (응답 파싱 포함)
+│   │   ├── chat_history.py      # 채팅 히스토리 (토큰 기반 슬라이딩 윈도우 + 요약)
 │   │   └── models.py            # 응답/감정 모델 정의
 │   ├── tts/
-│   │   └── tts_service.py        # Qwen3-TTS 연동 (로컬/원격 TTS_REMOTE_URL)
+│   │   └── tts_service.py       # Qwen3-TTS 연동 (로컬/원격 TTS_REMOTE_URL)
 │   ├── vtuber/
-│   │   └── vts_client.py         # VTS API 클라이언트 (포즈 주입 포함)
-│   │   # 미구현: pose_controller, parameter_controller, interpolation(Lerp), Idle
-│   ├── core/                     # (메인 진입점은 examples/chzzk_groq_example.py)
+│   │   └── vts_client.py        # VTS API 클라이언트 (감정→포즈 주입, set_leg_idle 등)
+│   │       # 포즈 계산·전송 통합. Idle은 예제 idle_worker에서 마우스/다리 주기 동작.
+│   │       # 전역 Lerp(모든 파라미터 보간) 미적용. 시선 복귀만 스텝 보간.
+│   ├── overlay/
+│   │   ├── state.py             # 시청자/AI 메시지, ignore_streamer_chat 등 공유 상태
+│   │   └── server.py            # FastAPI (/, /api/state, /api/clear, /api/toggle_streamer_chat)
+│   ├── core/                    # (메인 진입점은 examples/chzzk_groq_example.py)
 │   └── utils/
-│       └── chzzk_auth.py         # 치지직 인증
+│       └── chzzk_auth.py        # 치지직 인증
 ├── examples/                    # 실행 진입점
-│   ├── chzzk_groq_example.py    # 전체 파이프라인 (채팅+Groq+TTS+VTS)
+│   ├── chzzk_groq_example.py   # 전체 파이프라인 (채팅+Groq+TTS+VTS+오버레이+Idle)
 │   ├── chzzk_auth_example.py, chzzk_chat_example.py
 │   └── tts_*_example.py, colab_tts_server.py
-├── models/                       # TTS 모델 저장
-├── assets/voice_samples/        # 음성 샘플
+├── mac_tts_server/             # 맥(Apple Silicon) TTS API 서버 (MLX, 원격 TTS 옵션)
+├── assets/voice_samples/       # 음성 샘플 (ref.wav, ref_text.txt)
 ├── config/
-│   ├── character.txt             # 캐릭터 성격 (Groq 시스템 프롬프트 보강)
-│   ├── pose_mapping.json         # 감정-포즈 매핑
-│   └── vts_token.txt             # VTS 연결 토큰 (자동 저장)
+│   ├── character.txt           # 캐릭터 성격 (Groq 시스템 프롬프트 보강)
+│   ├── pose_mapping.json       # 감정-포즈 매핑
+│   └── vts_token.txt           # VTS 연결 토큰 (자동 저장)
 ├── history/
-│   ├── summary.json              # 요약 히스토리
-│   ├── summaries/                # 요약 타임스탬프 백업
-│   └── backups/                  # 수동 백업
+│   ├── summary.json            # 요약 히스토리
+│   ├── summaries/              # 요약 타임스탬프 백업
+│   └── backups/                # 수동 백업
 ├── requirements.txt
 ├── README.md
 └── PRD.md
 ```
+로컬 TTS 모델은 Hugging Face 캐시(기본 `cache/huggingface` 또는 HF_HOME)에 저장됨.
 
 ### 5.3 데이터 흐름
-1. **채팅 수집**: 치지직 Socket.IO → 채팅 파서 → (예제에서 큐/배치 처리) → ai/chat_history에 반영
-2. **AI 처리**: 
-   - 새 메시지 수신 시 채팅 히스토리에 user 메시지 추가
+1. **채팅 수집**: 치지직 Socket.IO → 채팅 파서 → (예제에서 큐/배치 처리). 시청자 메시지는 overlay_state에 즉시 추가(오버레이 표시). ignore_streamer_chat 시 방장(user_id==channel_id) 메시지는 제외.
+2. **AI 처리**:
+   - 말하기 시점에 큐에서 꺼낸 메시지들 → 채팅 히스토리에 user 추가
    - **토큰 임계치(7K) 도달 시**: 오래된 분량 요약 후 summary.json 및 history/summaries/에 저장, 메모리에서 제거
    - groq_client가 요약 히스토리 + 최근 대화(토큰 기준) + 새 메시지로 Groq API 요청
-   - JSON 파싱 후 응답·감정 반환, 채팅 히스토리에 assistant 메시지 추가
-3. **음성 생성**: 응답 큐 → Qwen3-TTS → 오디오 스트림 → VB-Cable
-4. **캐릭터 제어**: 응답 파서 → 포즈 제어 모듈 → 파라미터 계산 → VTS API → 파라미터 주입
-5. **동기화**: 오디오 스트림 + 파라미터 제어 → VTS 립싱크
+   - JSON 파싱 후 응답·감정 반환, 채팅 히스토리에 assistant 메시지 추가, overlay_state에 assistant_messages 추가
+3. **음성 생성**: 응답 → Qwen3-TTS(로컬 또는 TTS_REMOTE_URL) → 오디오 → VB-Cable
+4. **캐릭터 제어**: 감정 → vts_client(pose_mapping.json) → VTS API 파라미터 주입. 말하기 전 시선 연출, 말하는 중 시선 복귀(스텝 보간). Idle은 idle_worker에서 마우스/다리 주기 동작.
+5. **동기화**: 오디오 스트림 → VTS 립싱크
+6. **방송 오버레이**: overlay 서버가 /api/state로 시청자·AI 메시지 제공. OBS 브라우저 소스에서 표시. 10분 경과 메시지 페이드아웃, 클리어·방장 숨김 토글 지원.
 
 ---
 
@@ -494,7 +481,8 @@ class ChatMessage:
     message: str           # 메시지 내용
     timestamp: datetime    # 타임스탬프
     emoticons: List[str]   # 이모티콘 리스트
-    channel_id: str       # 채널 ID
+    channel_id: str        # 채널 ID
+    # 구현 확장: message_id, user_id, user_badge (방장 판별: user_id == channel_id)
 ```
 
 ### 6.2 AI 응답
@@ -508,12 +496,13 @@ class AIResponse:
 ```
 
 ### 6.2.1 채팅 히스토리 관리
+실제 구현은 **토큰 기반** 슬라이딩 윈도우(예: 7K 토큰 임계치)와 요약으로 오래된 분량을 정리함.
 ```python
 @dataclass
 class ChatHistory:
-    # 메모리: 최근 10개 대화 유지
+    # 메모리: 토큰 기준 최근 대화 유지
     recent_messages: List[Dict[str, str]]  # [{"role": "user", "content": "..."}, ...]
-    max_recent_count: int = 10             # 최근 대화 최대 개수
+    max_recent_count: int = 10             # 참고용; 실제는 토큰 수로 제한
     
     # 파일: 요약 히스토리
     summary_file: str = "history/summary.json"

@@ -9,6 +9,7 @@
 - **로컬 음성 생성**: Qwen3-TTS 모델을 로컬 GPU 환경에서 구동하여 저지연 고음질 음성 출력
 - **멀티모달 반응**: 답변 내용에 맞춘 포즈, 립싱크 동시 수행
 - **정밀 캐릭터 제어**: VTube Studio API를 통한 부드러운 움직임 구현
+- **방송 오버레이**: OBS 브라우저 소스로 시청자 채팅 / AI 답변 표시 (클리어·방장 채팅 숨김 토글)
 
 ## 📋 요구사항
 
@@ -52,13 +53,14 @@ venv\Scripts\activate  # Windows
    - 로그인 리디렉션 URL 등록 (예: `http://localhost:8080/callback`)
 
 5. 환경 변수 설정
-- 프로젝트 루트에 `.env` 파일을 생성하고 아래 항목을 입력하세요.
-- **필수**: CHZZK_CLIENT_ID, CHZZK_CLIENT_SECRET, CHZZK_REDIRECT_URI, CHZZK_CHANNEL_ID, CHZZK_ACCESS_TOKEN(인증 후), GROQ_API_KEY
-- **선택**: GROQ_MODEL(기본 openai/gpt-oss-120b), TTS_REMOTE_URL(Colab TTS 사용 시). 자세한 예시는 [docs/QUICK_START.md](docs/QUICK_START.md) 참고.
+- 프로젝트 루트에 `.env` 파일을 생성하세요.
+- **실행 시 필수**: CHZZK_CHANNEL_ID, CHZZK_ACCESS_TOKEN, GROQ_API_KEY
+- **토큰 발급 시 필요** (한 번만): CHZZK_CLIENT_ID, CHZZK_CLIENT_SECRET, CHZZK_REDIRECT_URI ([docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md) 참고)
+- **선택**: GROQ_MODEL(기본 openai/gpt-oss-120b), TTS_REMOTE_URL(원격 TTS 사용 시), OVERLAY_PORT(기본 8765), TTS_OUTPUT_DEVICE(VB-Cable 등). 자세한 예시는 [docs/QUICK_START.md](docs/QUICK_START.md) 참고.
 
-6. Qwen3-TTS 모델 다운로드
-- Hugging Face 또는 공식 저장소에서 모델 다운로드
-- `models/qwen3-tts/` 디렉토리에 저장
+6. TTS (로컬 사용 시)
+- **로컬 GPU**: Qwen3-TTS는 Hugging Face 캐시에 자동 다운로드됩니다. `.env`의 `HF_HOME` 또는 기본 `cache/huggingface` 사용. 참조 음성은 `assets/voice_samples/ref.wav`, `ref_text.txt`에 두세요.
+- **원격 TTS**: GPU 없이 쓰려면 Colab 또는 맥(Apple Silicon)에서 TTS API 서버를 띄우고 `.env`에 `TTS_REMOTE_URL` 설정. Colab은 [docs/COLAB_TTS.md](docs/COLAB_TTS.md), 맥은 [mac_tts_server/README.md](mac_tts_server/README.md) 참고.
 
 7. VB-Cable 설치 및 설정
 - VB-Cable 다운로드 및 설치
@@ -68,7 +70,8 @@ venv\Scripts\activate  # Windows
 
 - **캐릭터 성격**: `config/character.txt`에 작성 시 Groq 시스템 프롬프트 앞에 붙어 적용됩니다. (예: `character.txt.example` 참고)
 - **VTS 포즈**: `config/pose_mapping.json`으로 감정별 파라미터 설정. 최초 연결 시 토큰은 `config/vts_token.txt`에 저장됩니다. ([docs/VTUBE_STUDIO.md](docs/VTUBE_STUDIO.md))
-- **원격 TTS**: Colab에서 TTS 서버를 띄우고 `.env`에 `TTS_REMOTE_URL`을 설정하면 로컬 대신 원격 TTS를 사용합니다. ([docs/COLAB_TTS.md](docs/COLAB_TTS.md))
+- **원격 TTS**: Colab 또는 맥(MLX)에서 TTS 서버를 띄운 뒤 `.env`에 `TTS_REMOTE_URL` 설정 시 로컬 대신 원격 TTS 사용. ([docs/COLAB_TTS.md](docs/COLAB_TTS.md), [mac_tts_server/README.md](mac_tts_server/README.md))
+- **방송 오버레이**: `chzzk_groq_example.py` 실행 시 같은 프로세스에서 오버레이 서버가 백그라운드로 뜹니다. OBS에서 브라우저 소스 추가 → URL에 `http://127.0.0.1:8765/` (포트 변경 시 `.env`에 `OVERLAY_PORT` 설정). 화면에 시청자 채팅 / AI 답변 컬럼, 클리어·방장 채팅 숨김 토글 제공.
 - 자세한 요구사항은 [PRD.md](PRD.md)를 참고하세요.
 
 ## 🎮 사용법
@@ -100,6 +103,10 @@ python examples/tts_clone_example.py
 python examples/tts_design_then_clone_example.py
 ```
 
+### 방송 오버레이 (OBS)
+- `python examples/chzzk_groq_example.py` 실행 시 오버레이 서버가 `http://127.0.0.1:8765/` (또는 OVERLAY_PORT)에서 자동 기동됩니다.
+- OBS에서 **브라우저 소스** 추가 후 URL에 위 주소 입력하면 시청자 채팅(오른쪽)과 AI 답변(왼쪽)이 표시됩니다. 페이지의 **클리어** 버튼으로 수동 클리어, **방장 숨김** 토글로 방장 채팅 표시/무시 가능.
+
 **⚠️ 중요**: 실제 사용 전에 다음을 설정해야 합니다:
 1. 가상환경 활성화 후 `pip install -r requirements.txt`
 2. 치지직 개발자 센터에서 애플리케이션 등록 및 Client ID/Secret 발급
@@ -116,16 +123,19 @@ aischoco/
 ├── src/
 │   ├── chat/          # 치지직 채팅 수집
 │   ├── ai/            # Groq API 연동, 채팅 히스토리(토큰 기반 요약)
-│   ├── tts/           # Qwen3-TTS 음성 생성
-│   ├── vtuber/        # VTube Studio 제어 (vts_client)
+│   ├── tts/           # Qwen3-TTS 음성 생성 (로컬/원격 TTS_REMOTE_URL)
+│   ├── vtuber/        # VTube Studio 제어 (vts_client, 감정·아이들 포즈)
+│   ├── overlay/       # 방송 오버레이 (상태·HTTP 서버, OBS 브라우저 소스용)
 │   ├── core/          # (예제는 examples/ 에서 실행)
 │   └── utils/         # 유틸리티
 ├── examples/         # 실행 진입점 (chzzk_groq_example.py 등)
-├── models/            # TTS 모델 저장
-├── assets/            # 음성 샘플 등
-├── config/            # character.txt, pose_mapping.json 등
+├── mac_tts_server/   # 맥(Apple Silicon)용 TTS API 서버 (원격 TTS 옵션)
+├── assets/            # 음성 샘플(voice_samples), 이미지 등
+├── config/            # character.txt, pose_mapping.json, vts_token.txt
 └── history/           # summary.json, summaries/, backups/
 ```
+
+로컬 TTS 모델은 Hugging Face 캐시(기본 `cache/huggingface` 또는 `.env` HF_HOME)에 저장됩니다.
 
 ## 📚 문서
 
@@ -134,6 +144,7 @@ aischoco/
 - [docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md) - 치지직 API 사용 가이드 (애플리케이션 등록, Access Token 발급 등)
 - [docs/VTUBE_STUDIO.md](docs/VTUBE_STUDIO.md) - VTube Studio 연결 및 감정 포즈 설정 (pose_mapping.json)
 - [docs/COLAB_TTS.md](docs/COLAB_TTS.md) - Colab 원격 TTS 사용 (TTS_REMOTE_URL)
+- [mac_tts_server/README.md](mac_tts_server/README.md) - 맥(Apple Silicon) TTS API 서버 (MLX, 원격 TTS)
 
 ## 🔗 참고 자료
 
