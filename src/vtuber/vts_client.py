@@ -203,3 +203,23 @@ class VTSClient:
         except Exception as e:
             logger.warning("VTS 마우스 위치 주입 실패: %s", e)
             return False
+
+    async def set_leg_idle(self, leg_r: float, leg_l: float) -> bool:
+        """아이들용 다리 파라미터만 주입 (AIsChocoLegR, AIsChocoLegL)."""
+        if self._vts is None:
+            if not await self.connect():
+                return False
+        try:
+            req = self._vts.vts_request.requestSetMultiParameterValue(
+                parameters=["AIsChocoLegR", "AIsChocoLegL"],
+                values=[float(leg_r), float(leg_l)],
+                weight=1.0,
+                face_found=True,
+                mode="set",
+            )
+            await self._vts.request(req)
+            logger.debug("VTS 다리 아이들: LegR=%.1f LegL=%.1f", leg_r, leg_l)
+            return True
+        except Exception as e:
+            logger.warning("VTS 다리 파라미터 주입 실패: %s", e)
+            return False

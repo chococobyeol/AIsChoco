@@ -16,6 +16,7 @@ Colab TTS: .env에 TTS_REMOTE_URL=https://xxx.ngrok-free.app 설정 시 TTS를 C
 import asyncio
 import logging
 import os
+import random
 import sys
 import threading
 import time
@@ -73,12 +74,73 @@ async def _animate_look_back_to_center(
             await asyncio.sleep(delay)
 
 
+async def idle_worker(
+    vts_client: Optional[VTSClient],
+    is_speaking: List[bool],
+) -> None:
+    """
+    말하기와 겹치지 않게 아이들 자세: 마우스는 (-0.25,-0.65)↔(+0.25,-0.65) 왔다갔다 2~3번 후
+    ~10초 쉬기 반복. 다리는 별도로 ~10초 주기로 LegR/LegL 살짝 좌우.
+    """
+    if not vts_client:
+        return
+    move_duration = 1.0
+    rest_after_mouse = 10.0
+    leg_interval = 10.0
+    next_mouse_cycle = time.monotonic()
+    next_leg = time.monotonic()
+    while True:
+        try:
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            break
+        if is_speaking[0]:
+            continue
+        now = time.monotonic()
+
+        # 마우스: 왼쪽↔오른쪽 1~5번 왔다갔다 후, 다음 사이클은 10초 뒤
+        if now >= next_mouse_cycle:
+            rounds = random.randint(1, 5)
+            y_base = -0.65
+            y_jitter = 0.04
+            for _ in range(rounds):
+                if is_speaking[0]:
+                    break
+                y = y_base + random.uniform(-y_jitter, y_jitter)
+                try:
+                    await vts_client.set_mouse_position(-0.25, y)
+                except Exception:
+                    pass
+                await asyncio.sleep(move_duration + random.uniform(-0.2, 0.3))
+                if is_speaking[0]:
+                    break
+                y = y_base + random.uniform(-y_jitter, y_jitter)
+                try:
+                    await vts_client.set_mouse_position(0.25, y)
+                except Exception:
+                    pass
+                await asyncio.sleep(move_duration + random.uniform(-0.2, 0.3))
+            next_mouse_cycle = time.monotonic() + rest_after_mouse + random.uniform(-1, 1.5)
+
+        # 다리: 주기적으로 살짝 이동 (마우스와 독립, 마우스 블록 끝난 뒤 현재 시각으로 재확인)
+        now = time.monotonic()
+        if now >= next_leg:
+            leg_r = random.uniform(-20, 20)
+            leg_l = random.uniform(-20, 20)
+            try:
+                await vts_client.set_leg_idle(leg_r, leg_l)
+            except Exception:
+                pass
+            next_leg = now + leg_interval + random.uniform(-4, 4)
+
+
 async def reply_worker(
     queue: asyncio.Queue,
     groq_client: GroqClient,
     tts_service: TTSService,
     vts_client: Optional[VTSClient],
     chat_history: ChatHistory,
+    is_speaking: List[bool],
 ):
     """
     큐에서 메시지를 꺼내, 말 끝난 뒤에만 일괄 처리.
@@ -157,6 +219,7 @@ async def reply_worker(
                     except Exception as vts_e:
                         logger.debug("VTS 포즈 실패: %s", vts_e)
                 try:
+                    is_speaking[0] = True
                     play_task = asyncio.create_task(
                         asyncio.to_thread(tts_service.play_file, path)
                     )
@@ -168,6 +231,8 @@ async def reply_worker(
                     await play_task
                 except Exception as play_e:
                     logger.warning("재생 실패: %s", play_e)
+                finally:
+                    is_speaking[0] = False
             chat_history.flush_summary(groq_client)
         except asyncio.CancelledError:
             break
@@ -208,10 +273,16 @@ async def main():
     except Exception as e:
         logger.debug("오버레이 서버 미시작: %s", e)
 
+    is_speaking: List[bool] = [False]
     queue: asyncio.Queue = asyncio.Queue()
     worker_task = asyncio.create_task(
-        reply_worker(queue, groq_client, tts_service, vts_client, chat_history)
+        reply_worker(
+            queue, groq_client, tts_service, vts_client, chat_history, is_speaking
+        )
     )
+    idle_task: Optional[asyncio.Task] = None
+    if vts_client:
+        idle_task = asyncio.create_task(idle_worker(vts_client, is_speaking))
 
     def on_message(msg: ChatMessage):
         viewer_list = overlay_state.setdefault("viewer_messages", [])
@@ -245,10 +316,17 @@ async def main():
         pass
     finally:
         worker_task.cancel()
+        if idle_task is not None:
+            idle_task.cancel()
         try:
             await worker_task
         except asyncio.CancelledError:
             pass
+        if idle_task is not None:
+            try:
+                await idle_task
+            except asyncio.CancelledError:
+                pass
         await client.stop()
 
 
