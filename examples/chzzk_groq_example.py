@@ -221,7 +221,7 @@ async def reply_worker(
                     continue
                 # 60초 대기 중 아무나 타로/봐줘 요청하면 "창 닫힐 때까지 기다려 주세요" 멘트만 (AI 처리)
                 did_wait_ment = False
-                for m in pending_msgs:
+                for m, oid in zip(pending_msgs, pending_ids):
                     msg = (getattr(m, "message", "") or "").strip()
                     looks_tarot = "타로" in msg or "봐줘" in msg or "볼래" in msg
                     looks_again = ("또" in msg or "다시" in msg) and ("봐" in msg or "볼" in msg or "해" in msg)
@@ -241,7 +241,18 @@ async def reply_worker(
                             pass
                         finally:
                             is_speaking[0] = False
-                        kept = [(mm, oid) for mm, oid in zip(pending_msgs, pending_ids) if mm != m]
+                        overlay_state.setdefault("assistant_messages", []).append({
+                            "message": reply_text,
+                            "ts": time.time(),
+                        })
+                        a_msgs = overlay_state.get("assistant_messages") or []
+                        if len(a_msgs) > MAX_ASSISTANT_MESSAGES:
+                            overlay_state["assistant_messages"] = a_msgs[-MAX_ASSISTANT_MESSAGES:]
+                        for v in overlay_state.get("viewer_messages") or []:
+                            if v.get("id") == oid:
+                                v["processed"] = True
+                                break
+                        kept = [(mm, oid2) for mm, oid2 in zip(pending_msgs, pending_ids) if mm != m]
                         pending_msgs = [x for x, _ in kept]
                         pending_ids = [y for _, y in kept]
                         logger.info("타로 60초 대기 중 요청 → 기다리라 멘트 TTS: %s", reply_text[:50])
@@ -442,7 +453,7 @@ async def reply_worker(
                         else:
                             logger.warning("타로 카드 선택 불일치: chosen %s장 (필요 %s)", len(chosen), spread_count)
                         continue
-                    # 번호 부족/애매 → AI가 준 재요청 문장으로 TTS + 채팅 오버레이에 표시
+                    # 번호 부족/애매 → AI가 준 재요청 문장으로 TTS + 오버레이 표시 + 해당 시청자 메시지 처리됨
                     reask_text = selection.get("response") or ""
                     reask_tts = (selection.get("tts_text") or reask_text).strip() or reask_text
                     print(f"  → [타로 재요청] {reask_text}")
@@ -454,6 +465,12 @@ async def reply_worker(
                     a_msgs = overlay_state.get("assistant_messages") or []
                     if len(a_msgs) > MAX_ASSISTANT_MESSAGES:
                         overlay_state["assistant_messages"] = a_msgs[-MAX_ASSISTANT_MESSAGES:]
+                    for m, oid in zip(pending_msgs, pending_ids):
+                        if m in requester_msgs:
+                            for v in overlay_state.get("viewer_messages") or []:
+                                if v.get("id") == oid:
+                                    v["processed"] = True
+                                    break
                     try:
                         path = await asyncio.to_thread(
                             _tts_synthesize_only,

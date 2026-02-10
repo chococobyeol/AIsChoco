@@ -504,6 +504,7 @@ class GroqClient:
 (2) 시청자가 타로를 하지 않겠다는 의도(취소, 그만, 안 볼래 등)면 → tarot_cancel을 true로 하고, response에는 취소 인사 한 문장(존댓말).
 (3) 시청자가 "결과 알려줘", "답변해" 등 해석을 요구하면 → tarot_numbers 없이, response에 이유 한 줄 설명 후 재요청. tts_text는 읽었을 때 자연스러운 한국어로.
 (4) 번호가 아니거나 부족/애매하면 → tarot_numbers 없이, response에 왜 인식 안 됐는지 한 줄 설명 후 재요청. tts_text는 읽었을 때 자연스러운 한국어로.
+(5) 1~78 **자연수(정수)**가 아니면 번호로 인식하지 말 것. 다음은 모두 **인식 안 함** → tarot_numbers 넣지 말고 재요청: 소수(4.31, 3.14), 분수(1/2, 3/4), 무리수(π, √2, 2.718…), 음수, 0, 79 이상. 그런 입력이면 "1번부터 78번 사이 자연수로만 골라주세요" 식으로 재요청.
 
 emotion: happy, sad, angry, surprised, neutral, excited 중 하나.
 번호를 인식했으면 response에 확인 멘트를 쓸 때 반드시 tarot_numbers에도 같은 번호 배열을 넣어야 해석 단계로 진행됩니다. 생략하지 마세요.
@@ -660,6 +661,14 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                         # 부분만 인식(예: 77, 65) → pending_numbers로 저장되도록
                         out["tarot_numbers"] = from_resp
                         logger.info("타로 번호 AI 응답문에서 부분 추출(누적용): %s", out["tarot_numbers"])
+
+            # 시청자 말에 숫자는 있는데 1~78 유효 번호가 없으면(예: 512) → 인식 못함. AI가 뭐라 해도 번호 쓰지 말고 재요청
+            parsed_from_msg = _parse_numbers_1_78(msg)
+            if re.search(r"\d", msg or "") and not parsed_from_msg and out.get("tarot_numbers"):
+                out["tarot_numbers"] = None
+                out["response"] = f"1번부터 78번 사이 번호만 인식돼요. {spread_count}개 골라주세요."
+                out["tts_text"] = out["response"]
+                logger.info("타로 번호 시청자 말이 범위 밖(예: 512) → 인식 불가, 재요청")
 
             # 시청자 말에 중복 번호가 있으면 무조건 처음부터 다시 뽑으라고 함 (JSON/fallback 경로 상관없이)
             if user_has_duplicate:
