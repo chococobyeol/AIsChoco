@@ -338,23 +338,7 @@ async def reply_worker(
                         finally:
                             is_speaking[0] = False
                         continue
-                    if numbers and 0 < len(numbers) < spread_count:
-                        overlay_state["tarot"] = {**tarot, "pending_numbers": numbers}
-                        try:
-                            path = await asyncio.to_thread(
-                                _tts_synthesize_only,
-                                tts_service,
-                                text_for_tts_numbers(selection.get("tts_text") or selection["response"]),
-                                selection.get("emotion") or "neutral",
-                                "Korean",
-                            )
-                            is_speaking[0] = True
-                            await asyncio.to_thread(tts_service.play_file, path)
-                        except Exception:
-                            pass
-                        finally:
-                            is_speaking[0] = False
-                        continue
+                    # N개 미만이면 누적 안 함 → 재요청 분기에서 "처음부터 다시 N개" 멘트만
                     if numbers and len(numbers) >= spread_count:
                         deck = tarot.get("deck") or []
                         chosen = [deck[n - 1] for n in numbers[:spread_count] if 1 <= n <= len(deck)]

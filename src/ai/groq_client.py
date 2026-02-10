@@ -300,9 +300,11 @@ class GroqClient:
         user_content = f"채팅 목록:\n{content}"
         if not tarot_enabled:
             user_content += "\n\n[오늘은 타로/운세 기능 비활성화. 지금 당장 타로 해달라고 요청하면 거절하고 action 넣지 말 것. \"내일은 되나\", \"언제 되나\"처럼 다음에 가능한지·일정을 묻는 말에는 문맥에 맞게 답할 것 (예: 내일/다음 방송 때는 될 수 있다고).]"
-        elif tarot_state and tarot_state.get("phase") in ("selecting", "revealed"):
+        elif tarot_state and tarot_state.get("phase") == "selecting":
             requester = tarot_state.get("requester_nickname") or "다른 분"
-            user_content += f"\n\n[현재 타로 진행 중. {requester}님이 보고 있는 중이므로, 새로 \"타로 봐줘\" 요청한 사람에게는 거절하고 \"지금 다른 분이 보고 있어서 지금은 안 됩니다\" 같은 한 문장만 답할 것. action 절대 넣지 말 것. 지금 타로 보는 사람(요청자)이 번호 등을 말한 내용만 타로 선택으로 처리하고, 그 외 사람의 타로 요청은 위처럼 거절만.]"
+            user_content += f"\n\n[현재 타로 **번호 선택** 단계. {requester}님이 1~78 중 N개 고르는 중. 새로 \"타로 봐줘\" 요청한 사람에게는 거절만. action 절대 넣지 말 것. 요청자가 번호(숫자)만 말한 내용은 타로 선택으로 처리되고, 그 외 사람의 타로 요청은 \"지금 다른 분이 보고 있어서 지금은 안 됩니다\" 같은 한 문장만.]"
+        elif tarot_state and tarot_state.get("phase") == "revealed":
+            user_content += "\n\n[현재 타로 **결과 공개** 단계. 이미 카드를 뽑은 뒤 해석 보여주는 중임. 시청자가 숫자만 말해도(예: 5, 1) **새 타로나 N장 뽑기로 해석하지 말 것**. \"5장 골라주세요\", \"1번부터 78번 중\" 같은 멘트 금지. action 절대 넣지 말 것. 짧게 반응만 하거나 \"이번 타로 끝날 때까지 잠시만 기다려 주세요\" 식으로만 답할 것.]"
         elif tarot_state and tarot_state.get("phase") == "asking_question":
             user_content += "\n\n[현재 타로 단계: 시청자가 \"뭐에 대해 볼지\"에 답한 상태. 위 채팅이 그 답변. 주제를 말했으면 action \"tarot\", tarot_question에 주제, **tarot_spread_count에 주제에 맞는 장수(1~5)를 반드시 넣을 것.** 예/아니오 질문→1, 단순 주제→3, 장기·복잡→5. response에는 그 주제로 볼게요 + 1~78 중 N개 골라달라는 멘트를 존댓말로. 거절·모르겠음·없음이면 일반 답변만, action 넣지 말 것.]"
 
@@ -496,20 +498,16 @@ class GroqClient:
 - 요청한 N개만 순서대로. 없거나 부족하면 빈 배열.
 반드시 JSON 한 줄만: {"numbers": [1, 13, 50]} (개수는 사용자 요청 N에 맞춤)"""
 
-    TAROT_SELECTION_SYSTEM = """현재 타로 번호 선택 단계입니다. 시청자에게 1~78 중 N개를 골라달라고 요청한 상태에서 시청자가 말한 내용을 자연어로 이해하세요.
-**중요: 시청자가 1~78 번호를 제시했으면 반드시 tarot_numbers에 정수 배열을 넣어야 합니다. 숫자·한글 모두 인식: "123"→[1,2,3], "하나 다섯 십삼"→[1,5,13], "열한번 스무번 일번"→[11,20,1], "일곱 여덟 아홉"→[7,8,9] 등. 생략 금지.**
-"이미 고른 번호"가 있으면 이번에 말한 번호와 합쳐서 총 N개가 되도록 tarot_numbers에 **전체 번호 배열**을 넣으세요.
+    TAROT_SELECTION_SYSTEM = """현재 타로 번호 선택 단계입니다. 시청자에게 1~78 중 N개를 골라달라고 요청한 상태입니다.
 
-(1) 시청자가 1~78 범위의 **정수** 번호를 제시했으면 → **반드시** tarot_numbers에 [전체 N개] 넣고, response에는 그걸 확인하는 짧은 한 문장(존댓말). tts_text에는 같은 내용을 TTS로 읽었을 때 한국어로 자연스럽게 들리도록 말하기 좋은 문장으로.
-(2) 시청자가 타로를 하지 않겠다는 의도(취소, 그만, 안 볼래 등)면 → tarot_cancel을 true로 하고, response에는 취소 인사 한 문장(존댓말).
-(3) 시청자가 "결과 알려줘", "답변해" 등 해석을 요구하면 → tarot_numbers 없이, response에 이유 한 줄 설명 후 재요청. tts_text는 읽었을 때 자연스러운 한국어로.
-(4) 번호가 아니거나 부족/애매하면 → tarot_numbers 없이, response에 왜 인식 안 됐는지 한 줄 설명 후 재요청. tts_text는 읽었을 때 자연스러운 한국어로.
-(5) 1~78 **자연수(정수)**가 아니면 번호로 인식하지 말 것. 다음은 모두 **인식 안 함** → tarot_numbers 넣지 말고 재요청: 소수(4.31, 3.14), 분수(1/2, 3/4), 무리수(π, √2, 2.718…), 음수, 0, 79 이상. 그런 입력이면 "1번부터 78번 사이 자연수로만 골라주세요" 식으로 재요청.
+(1) 시청자가 1~78 범위의 정수 번호를 **정확히 N개** 제시했으면 → tarot_numbers에 그 N개 배열을 넣고, response에는 확인 멘트(존댓말). tts_text는 TTS로 자연스러운 문장으로.
+(2) 시청자가 타로 취소(그만, 안 볼래 등)면 → tarot_cancel true, response에 취소 인사.
+(3) **N개가 안 나오면**(부족, 범위 밖 포함, 중복, 애매함 등) → tarot_numbers 넣지 말고, response에 "처음부터 다시 N개만 골라주세요" 식으로만 재요청. 부분 인식·누적 없음.
 
+1~78 자연수(정수)가 아니면(소수, 분수, 79 이상 등) 인식 안 함 → tarot_numbers 없이 "처음부터 다시 N개 골라주세요"만.
 emotion: happy, sad, angry, surprised, neutral, excited 중 하나.
-번호를 인식했으면 response에 확인 멘트를 쓸 때 반드시 tarot_numbers에도 같은 번호 배열을 넣어야 해석 단계로 진행됩니다. 생략하지 마세요.
-JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 때 자연스러운 한국어 문장", "emotion": "감정키", "tarot_numbers": [1,2,3] 또는 생략, "tarot_cancel": true 또는 생략}
-예시(번호 인식 시): {"response": "1, 5, 13번 선택하셨네요.", "tts_text": "일, 오, 십삼 번 선택하셨네요.", "emotion": "neutral", "tarot_numbers": [1, 5, 13]}"""
+JSON 한 줄: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numbers": [1,2,3] 또는 생략, "tarot_cancel": true 또는 생략}
+예시(인식 시): {"response": "1, 5, 13번 선택하셨네요.", "tts_text": "일, 오, 십삼 번 선택하셨네요.", "emotion": "neutral", "tarot_numbers": [1, 5, 13]}"""
 
     def process_tarot_selection(
         self,
@@ -530,17 +528,12 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
             "tarot_cancel": False,
         }
         msg = (user_message or "").strip()
+        if not msg:
+            return out
         # 시청자 말에 1~78 번호가 중복으로 들어갔는지 검사 (순서 유지해서 중복만 판별)
         _all = [int(m) for m in re.findall(r"\d+", msg) if m.isdigit() and 1 <= int(m) <= 78]
         user_has_duplicate = len(_all) != len(set(_all))
-        pending = [int(x) for x in (pending_numbers or []) if isinstance(x, (int, float)) and 1 <= int(x) <= 78]
-        pending = list(dict.fromkeys(pending))[:spread_count]
-        if pending:
-            user_content = f"이미 고른 번호: {', '.join(map(str, pending))}. 아직 부족한 개수: {spread_count - len(pending)}개. 요청한 총 개수 N: {spread_count}\n시청자 이번 말: {msg or '(추가로 고름)'}"
-        elif not msg:
-            return out
-        else:
-            user_content = f"요청한 개수 N: {spread_count}\n시청자 말: {msg}"
+        user_content = f"요청한 개수 N: {spread_count}\n시청자 말: {msg}"
         messages: List[dict] = []
         if context_messages:
             messages.extend(context_messages[-6:])
@@ -631,16 +624,7 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                                 has_duplicate = True
                     except (TypeError, ValueError):
                         continue
-                if pending:
-                    merged = list(pending)
-                    for n in clean:
-                        if n not in merged:
-                            merged.append(n)
-                        if len(merged) >= spread_count:
-                            break
-                    clean = merged[:spread_count]
-                else:
-                    clean = clean[:spread_count]
+                clean = clean[:spread_count]
                 if has_duplicate:
                     out["tarot_numbers"] = None
                     out["response"] = f"중복된 번호가 있어요. 처음부터 다시 {spread_count}개 골라주세요."
@@ -649,26 +633,13 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                 elif len(clean) >= spread_count:
                     out["tarot_numbers"] = clean[:spread_count]
                     logger.info("타로 번호 인식: %s", out["tarot_numbers"])
-            # AI가 JSON에 tarot_numbers를 안 넣은 경우 → 응답 문장에서 번호 추출 (전체 또는 부분)
+            # AI가 JSON에 tarot_numbers를 안 넣은 경우 → 응답 문장에서 번호 추출 (N개만, 부족하면 쓰지 않음)
             if out["tarot_numbers"] is None and out.get("response") and not has_duplicate:
                 resp = out["response"]
-                from_resp = self._parse_tarot_numbers_fallback(resp, spread_count, return_partial=True)
-                if from_resp:
-                    if len(from_resp) >= spread_count:
-                        out["tarot_numbers"] = from_resp[:spread_count]
-                        logger.info("타로 번호 AI 응답문에서 추출: %s", out["tarot_numbers"])
-                    else:
-                        # 부분만 인식(예: 77, 65) → pending_numbers로 저장되도록
-                        out["tarot_numbers"] = from_resp
-                        logger.info("타로 번호 AI 응답문에서 부분 추출(누적용): %s", out["tarot_numbers"])
-
-            # 시청자 말에 숫자는 있는데 1~78 유효 번호가 없으면(예: 512) → 인식 못함. AI가 뭐라 해도 번호 쓰지 말고 재요청
-            parsed_from_msg = _parse_numbers_1_78(msg)
-            if re.search(r"\d", msg or "") and not parsed_from_msg and out.get("tarot_numbers"):
-                out["tarot_numbers"] = None
-                out["response"] = f"1번부터 78번 사이 번호만 인식돼요. {spread_count}개 골라주세요."
-                out["tts_text"] = out["response"]
-                logger.info("타로 번호 시청자 말이 범위 밖(예: 512) → 인식 불가, 재요청")
+                from_resp = self._parse_tarot_numbers_fallback(resp, spread_count, return_partial=False)
+                if from_resp and len(from_resp) >= spread_count:
+                    out["tarot_numbers"] = from_resp[:spread_count]
+                    logger.info("타로 번호 AI 응답문에서 추출: %s", out["tarot_numbers"])
 
             # 시청자 말에 중복 번호가 있으면 무조건 처음부터 다시 뽑으라고 함 (JSON/fallback 경로 상관없이)
             if user_has_duplicate:
@@ -677,70 +648,6 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                 out["tts_text"] = out["response"]
                 logger.info("타로 번호 시청자 말 중복 감지 → 처음부터 재선택 요청")
 
-            # 시청자 말에서 추출한 번호와 AI 해석이 다르면 피드백으로 한 번 재시도 (중복 안내한 경우는 제외)
-            parsed_from_msg = _parse_numbers_1_78(msg)
-            ai_nums = out.get("tarot_numbers")
-            ai_nums = list(ai_nums)[:spread_count] if isinstance(ai_nums, list) else []
-            if not has_duplicate and not user_has_duplicate and parsed_from_msg and set(ai_nums) != set(parsed_from_msg):
-                feedback = (
-                    f"[번호 해석 오류] 시청자 말: \"{msg}\". 위에서 추출한 번호가 시청자가 말한 숫자와 다릅니다. "
-                    f"시청자가 말한 숫자 중 1~78만 순서대로 사용하세요. (예: 50 46 88 → 50, 46만 유효, 88은 78 초과 제외. "
-                    f"{spread_count}개 필요하면 부족분만큼 더 골라달라고 재요청.) 동일한 JSON 형식으로 다시 출력하세요."
-                )
-                retry_messages = api_messages + [
-                    {"role": "assistant", "content": raw},
-                    {"role": "user", "content": feedback},
-                ]
-                try:
-                    response2 = self._client.chat.completions.create(
-                        model=self.model,
-                        messages=retry_messages,
-                        max_tokens=max_tok,
-                        response_format={"type": "json_object"},
-                    )
-                    raw2 = (response2.choices[0].message.content or "").strip()
-                    data2 = json.loads(raw2)
-                    out["response"] = (data2.get("response") or out["response"]).strip() or out["response"]
-                    if (data2.get("tts_text") or "").strip():
-                        out["tts_text"] = (data2.get("tts_text") or "").strip()
-                    out["emotion"] = (data2.get("emotion") or "neutral").strip()
-                    if out["emotion"] not in VALID_EMOTIONS:
-                        out["emotion"] = "neutral"
-                    if data2.get("tarot_cancel") is True:
-                        out["tarot_cancel"] = True
-                        return out
-                    nums2 = data2.get("tarot_numbers") or data2.get("tarotNumbers")
-                    if isinstance(nums2, list):
-                        clean2: List[int] = []
-                        for x in nums2:
-                            try:
-                                if isinstance(x, float) and x != int(x):
-                                    continue
-                                n = int(x) if not isinstance(x, int) else x
-                                if 1 <= n <= 78 and n not in clean2:
-                                    clean2.append(n)
-                            except (TypeError, ValueError):
-                                continue
-                        if pending:
-                            merged2 = list(pending)
-                            for n in clean2:
-                                if n not in merged2:
-                                    merged2.append(n)
-                                if len(merged2) >= spread_count:
-                                    break
-                            clean2 = merged2[:spread_count]
-                        else:
-                            clean2 = clean2[:spread_count]
-                        if len(clean2) >= spread_count:
-                            out["tarot_numbers"] = clean2[:spread_count]
-                            logger.info("타로 번호 피드백 재시도 후: %s", out["tarot_numbers"])
-                    if out.get("tarot_numbers") is None and out.get("response"):
-                        from_resp2 = self._parse_tarot_numbers_fallback(out["response"], spread_count, return_partial=True)
-                        if from_resp2:
-                            out["tarot_numbers"] = from_resp2[:spread_count] if len(from_resp2) >= spread_count else from_resp2
-                            logger.info("타로 번호 피드백 재시도 응답문에서 추출: %s", out["tarot_numbers"])
-                except Exception as retry_e:
-                    logger.warning("타로 선택 피드백 재시도 실패: %s", retry_e)
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("타로 선택 JSON 파싱 실패: %s", e)

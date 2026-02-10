@@ -61,6 +61,7 @@
     }
 
     .card-slot {
+      position: relative;
       width: 140px; height: 230px;
       background-size: cover; background-position: center;
       border-radius: 10px;
@@ -68,6 +69,12 @@
       border: 1px solid rgba(255,255,255,0.2);
       background-image: url('/tarot-assets/tarot_back.png');
       opacity: 0; transform: translateY(20px);
+    }
+    .card-back-number {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      font-size: 42px; font-weight: bold; color: rgba(255,255,255,0.95);
+      text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+      z-index: 1;
     }
 
     /* 결과 패널 */
@@ -185,7 +192,7 @@
       const indices = t.selected_indices || [];
 
       let cardsHtml = '';
-      indices.forEach((idx, i) => cardsHtml += `<div class="card-slot" id="card-${i}"></div>`);
+      indices.forEach((idx, i) => cardsHtml += `<div class="card-slot" id="card-${i}"><span class="card-back-number">${idx}</span></div>`);
 
       // 그래프 데이터가 있는지 확인
       const hasGraph = t.visual_data && (
@@ -246,6 +253,8 @@
             if(el) {
               el.style.backgroundImage = `url('${realSrc}')`;
               el.style.transform = rotation;
+              const numEl = el.querySelector('.card-back-number');
+              if (numEl) numEl.style.display = 'none';
             }
           }
         });
