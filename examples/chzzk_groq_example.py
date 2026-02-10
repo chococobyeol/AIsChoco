@@ -229,7 +229,7 @@ async def reply_worker(
                             path = await asyncio.to_thread(
                                 _tts_synthesize_only,
                                 tts_service,
-                                (selection.get("tts_text") or selection["response"]) if selection.get("tts_text") else text_for_tts_numbers(selection["response"]),
+                                text_for_tts_numbers(selection.get("tts_text") or selection["response"]),
                                 selection.get("emotion") or "neutral",
                                 "Korean",
                             )
@@ -248,7 +248,7 @@ async def reply_worker(
                             path = await asyncio.to_thread(
                                 _tts_synthesize_only,
                                 tts_service,
-                                (selection.get("tts_text") or selection["response"]) if selection.get("tts_text") else text_for_tts_numbers(selection["response"]),
+                                text_for_tts_numbers(selection.get("tts_text") or selection["response"]),
                                 selection.get("emotion") or "neutral",
                                 "Korean",
                             )
@@ -264,6 +264,23 @@ async def reply_worker(
                         chosen = [deck[n - 1] for n in numbers[:spread_count] if 1 <= n <= len(deck)]
                         logger.info("타로 번호 확정: %s, 덱 %s장, chosen %s장", numbers[:spread_count], len(deck), len(chosen))
                         if len(chosen) == spread_count:
+                            # 선택 확인 멘트가 있으면 먼저 TTS (예: "9, 3, 1번 선택하셨네요")
+                            confirm_ment = (selection.get("response") or "").strip()
+                            if confirm_ment and any(k in confirm_ment for k in ("선택", "고르셨", "확인")):
+                                try:
+                                    path_ment = await asyncio.to_thread(
+                                        _tts_synthesize_only,
+                                        tts_service,
+                                        text_for_tts_numbers(confirm_ment),
+                                        selection.get("emotion") or "neutral",
+                                        "Korean",
+                                    )
+                                    is_speaking[0] = True
+                                    await asyncio.to_thread(tts_service.play_file, path_ment)
+                                except Exception:
+                                    pass
+                                finally:
+                                    is_speaking[0] = False
                             question = tarot.get("question") or ""
                             result = await asyncio.to_thread(
                                 groq_client.get_tarot_interpretation, question, chosen
@@ -297,7 +314,7 @@ async def reply_worker(
                                     path = await asyncio.to_thread(
                                         _tts_synthesize_only,
                                         tts_service,
-                                        interp_tts if result.get("tts_text") else text_for_tts_numbers(result["interpretation"]),
+                                        text_for_tts_numbers(interp_tts),
                                         "neutral",
                                         "Korean",
                                     )
@@ -345,7 +362,7 @@ async def reply_worker(
                         path = await asyncio.to_thread(
                             _tts_synthesize_only,
                             tts_service,
-                            reask_tts if selection.get("tts_text") else text_for_tts_numbers(reask_text),
+                            text_for_tts_numbers(reask_tts),
                             selection.get("emotion") or "neutral",
                             "Korean",
                         )
@@ -423,7 +440,7 @@ async def reply_worker(
                     path = await asyncio.to_thread(
                         _tts_synthesize_only,
                         tts_service,
-                        chat_tts if getattr(ai_response, "tts_text", None) else text_for_tts_numbers(ai_response.response),
+                        text_for_tts_numbers(chat_tts),
                         ai_response.emotion,
                         "Korean",
                     )

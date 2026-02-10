@@ -64,19 +64,20 @@ BATCH_SYSTEM_PROMPT = """아래는 말하는 동안 들어온 채팅 목록입�
 
 타로(운세) 관련:
 - "타로 봐줘" / "타로 봐달라"처럼 주제 없이만 말한 경우: 반드시 "뭐에 대해 볼지"만 물어라. 번호(1~78 등) 말하면 안 됨. action "tarot_ask_question"만.
-- 시청자가 이미 주제를 말했을 때만: 그 주제로 타로 보겠다고 한 뒤, 1~78 중 번호 N개를 골라달라고 요청하는 멘트를 반드시 존댓말로, 매번 표현을 다르게 자연스럽게 (예: 그 주제로 볼게요. 1번부터 78번 중 N개만 골라주세요. / 좋아요, 그럼 그걸로 해볼게요. 1~78 중 N개만 골라주실래요? / 알겠어요, 그 주제로 볼게요. 번호 N개만 골라주세요. 등). action "tarot", tarot_question에 주제, tarot_spread_count에 장수. 뽑을 장수: "한 장만"/"1장" → 1, "3장"/말 없음 → 3, "5장" → 5 (1~5만, 생략 시 3).
+- 시청자가 이미 주제를 말했을 때만: 그 주제로 타로 보겠다고 한 뒤, 1~78 중 번호 N개를 골라달라고 요청하는 멘트를 반드시 존댓말로, 매번 표현을 다르게 자연스럽게. action "tarot", tarot_question에 주제, **tarot_spread_count에 주제에 맞는 장수(1~5)를 반드시 넣을 것. 생략 금지.** 주제에 따라 정하기: 예/아니오 질문(비 올까? 될까? 만날까?)→1, 단순·짧은 주제(내일 뭐할지, 오늘 운세, 이번 주)→3, 복잡·장기(내년 계획, 진로/인생 방향, 올해 운세)→5. 시청자가 "한 장만"/"1장"/"5장" 등으로 말했으면 그에 따름. 말 없으면 주제 성격으로 1·3·5 중 골라서 넣기.
 - 주제를 안 말했거나 거절이면 일반 답변만, action 없음.
 - 일반 대화면 action 생략.
 
 JSON 형식 (한 줄, 설명 없이):
-{"replies": [{"response": "한 문장(화면 표시용)", "tts_text": "TTS 읽기용, 같은 내용을 숫자·약어를 자연스러운 한글로 읽는 문장(선택)", "emotion": "감정키", "action": "tarot_ask_question"|"tarot"|생략, "tarot_question": "주제"|""|생략, "tarot_spread_count": 1|3|5|생략}]}
+{"replies": [{"response": "한 문장(화면 표시용)", "tts_text": "TTS로 읽었을 때 한국어로 자연스럽게 들리도록 같은 내용을 말하기 좋은 문장(선택)", "emotion": "감정키", "action": "tarot_ask_question"|"tarot"|생략, "tarot_question": "주제"|""|생략, "tarot_spread_count": 1|2|3|4|5}]}
+action이 "tarot"일 때는 tarot_spread_count 반드시 1~5 중 하나로 넣기. 생략하지 말 것.
 replies는 최대 1개. emotion은 반드시: happy, sad, angry, surprised, neutral, excited 중 하나. tts_text 없으면 response로 TTS."""
 
 SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. 중요한 맥락과 주제는 유지하세요. 한국어로 한 문단 이내."""
 
 TAROT_INTERPRET_SYSTEM = """당신은 타로 해석가입니다. 주어진 카드와 질문에 맞춰 해석과 시각화 데이터를 JSON으로만 출력하세요.
 출력 형식 (한 줄 JSON, 설명 없이):
-{"interpretation": "해석 전문 텍스트 (한국어, 화면 표시용)", "tts_text": "해석과 같은 내용을 TTS 읽기용으로 숫자·약어를 자연스러운 한글로 읽는 문장", "visual_data": {"visual_type": "radar_fixed"|"radar_dynamic"|"yes_no"|"keywords"|"candidates"|"decision_map", ...타입별 필드}, "soul_color": "gold"|"purple"|"black"|"neutral", "danger_alert": true|false}
+{"interpretation": "해석 전문 텍스트 (한국어, 화면 표시용)", "tts_text": "해석과 같은 내용을 TTS로 읽었을 때 한국어로 자연스럽게 들리도록 말하기 좋은 문장", "visual_data": {"visual_type": "radar_fixed"|"radar_dynamic"|"yes_no"|"keywords"|"candidates"|"decision_map", ...타입별 필드}, "soul_color": "gold"|"purple"|"black"|"neutral", "danger_alert": true|false}
 - visual_type이 radar_fixed면: "labels": ["애정","금전","사업/학업","건강","행운"], "scores": [0~100 5개]
 - radar_dynamic이면: "labels": ["라벨1","라벨2","라벨3"], "scores": [0~100 3개]
 - yes_no이면: "recommendation": "YES"|"NO", "score": 0~100
@@ -240,7 +241,7 @@ class GroqClient:
         if not tarot_enabled:
             user_content += "\n\n[오늘은 타로/운세 기능 비활성화. 지금 당장 타로 해달라고 요청하면 거절하고 action 넣지 말 것. \"내일은 되나\", \"언제 되나\"처럼 다음에 가능한지·일정을 묻는 말에는 문맥에 맞게 답할 것 (예: 내일/다음 방송 때는 될 수 있다고).]"
         elif tarot_state and tarot_state.get("phase") == "asking_question":
-            user_content += "\n\n[현재 타로 단계: 시청자가 \"뭐에 대해 볼지\"에 답한 상태. 위 채팅이 그 답변. 주제를 말했으면 action \"tarot\", tarot_question에 주제, tarot_spread_count에 장수(1~5), response에는 그 주제로 볼게요 + 1~78 중 N개 골라달라는 멘트를 반드시 존댓말로, 매번 다르게 자연스럽게. 거절·모르겠음·없음이면 일반 답변만, action 넣지 말 것.]"
+            user_content += "\n\n[현재 타로 단계: 시청자가 \"뭐에 대해 볼지\"에 답한 상태. 위 채팅이 그 답변. 주제를 말했으면 action \"tarot\", tarot_question에 주제, **tarot_spread_count에 주제에 맞는 장수(1~5)를 반드시 넣을 것.** 예/아니오 질문→1, 단순 주제→3, 장기·복잡→5. response에는 그 주제로 볼게요 + 1~78 중 N개 골라달라는 멘트를 존댓말로. 거절·모르겠음·없음이면 일반 답변만, action 넣지 말 것.]"
 
         messages = [{"role": "system", "content": self._system_prompt(BATCH_SYSTEM_PROMPT)}]
         if context_messages:
@@ -462,14 +463,15 @@ class GroqClient:
 **중요: 시청자가 1~78 번호를 제시했으면 반드시 tarot_numbers에 정수 배열을 넣어야 합니다. 숫자·한글 모두 인식: "123"→[1,2,3], "하나 다섯 십삼"→[1,5,13], "열한번 스무번 일번"→[11,20,1], "일곱 여덟 아홉"→[7,8,9] 등. 생략 금지.**
 "이미 고른 번호"가 있으면 이번에 말한 번호와 합쳐서 총 N개가 되도록 tarot_numbers에 **전체 번호 배열**을 넣으세요.
 
-(1) 시청자가 1~78 범위의 **정수** 번호를 제시했으면 → **반드시** tarot_numbers에 [전체 N개] 넣고, response에는 그걸 확인하는 짧은 한 문장(존댓말). tts_text에는 같은 내용을 TTS 읽기용으로 숫자를 한글로(1→일, 13→십삼) 읽는 문장.
+(1) 시청자가 1~78 범위의 **정수** 번호를 제시했으면 → **반드시** tarot_numbers에 [전체 N개] 넣고, response에는 그걸 확인하는 짧은 한 문장(존댓말). tts_text에는 같은 내용을 TTS로 읽었을 때 한국어로 자연스럽게 들리도록 말하기 좋은 문장으로.
 (2) 시청자가 타로를 하지 않겠다는 의도(취소, 그만, 안 볼래 등)면 → tarot_cancel을 true로 하고, response에는 취소 인사 한 문장(존댓말).
-(3) 시청자가 "결과 알려줘", "답변해" 등 해석을 요구하면 → tarot_numbers 없이, response에 이유 한 줄 설명 후 재요청. tts_text는 response와 동일하거나 읽기 좋게.
-(4) 번호가 아니거나 부족/애매하면 → tarot_numbers 없이, response에 왜 인식 안 됐는지 한 줄 설명 후 재요청. tts_text는 response와 동일.
+(3) 시청자가 "결과 알려줘", "답변해" 등 해석을 요구하면 → tarot_numbers 없이, response에 이유 한 줄 설명 후 재요청. tts_text는 읽었을 때 자연스러운 한국어로.
+(4) 번호가 아니거나 부족/애매하면 → tarot_numbers 없이, response에 왜 인식 안 됐는지 한 줄 설명 후 재요청. tts_text는 읽었을 때 자연스러운 한국어로.
 
 emotion: happy, sad, angry, surprised, neutral, excited 중 하나.
-JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS 읽기용(숫자 한글 읽기)", "emotion": "감정키", "tarot_numbers": [1,2,3] 또는 생략, "tarot_cancel": true 또는 생략}
-예시(번호 인식 시): {"response": "1, 5, 13번 선택하셨네요.", "tts_text": "일, 다섯, 십삼 번 선택하셨네요.", "emotion": "neutral", "tarot_numbers": [1, 5, 13]}"""
+번호를 인식했으면 response에 확인 멘트를 쓸 때 반드시 tarot_numbers에도 같은 번호 배열을 넣어야 해석 단계로 진행됩니다. 생략하지 마세요.
+JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 때 자연스러운 한국어 문장", "emotion": "감정키", "tarot_numbers": [1,2,3] 또는 생략, "tarot_cancel": true 또는 생략}
+예시(번호 인식 시): {"response": "1, 5, 13번 선택하셨네요.", "tts_text": "일, 오, 십삼 번 선택하셨네요.", "emotion": "neutral", "tarot_numbers": [1, 5, 13]}"""
 
     def process_tarot_selection(
         self,
@@ -577,6 +579,8 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS 읽기용(숫
                 clean: List[int] = []
                 for x in nums:
                     try:
+                        if isinstance(x, float) and x != int(x):
+                            continue
                         n = int(x) if not isinstance(x, int) else x
                         if 1 <= n <= 78 and n not in clean:
                             clean.append(n)
@@ -595,28 +599,14 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS 읽기용(숫
                 if len(clean) >= spread_count:
                     out["tarot_numbers"] = clean[:spread_count]
                     logger.info("타로 번호 인식: %s", out["tarot_numbers"])
-            if out["tarot_numbers"] is None and msg:
-                fallback_nums = self._parse_tarot_numbers_fallback(msg, spread_count)
-                if fallback_nums and len(fallback_nums) >= spread_count:
-                    final = list(fallback_nums[:spread_count])
-                    if pending:
-                        merged = list(pending)
-                        for n in fallback_nums:
-                            if n not in merged:
-                                merged.append(n)
-                            if len(merged) >= spread_count:
-                                break
-                        final = merged[:spread_count]
-                    out["tarot_numbers"] = final
-                    logger.info("타로 번호 폴백 인식: %s (원문: %s)", out["tarot_numbers"], msg[:50])
-            # AI가 JSON에 번호를 안 넣고 응답 문장에만 적은 경우(예: "선택하신 번호 1, 5, 13을 확인") → 응답에서 추출
+            # AI가 번호 확인 멘트는 했는데 JSON에 tarot_numbers를 안 넣은 경우 → 응답 문장에서만 추출(사용자 말 X)
             if out["tarot_numbers"] is None and out.get("response"):
-                resp_text = out["response"]
-                if any(k in resp_text for k in ("확인", "선택", "고르", "번", "번호")):
-                    from_response = self._parse_tarot_numbers_fallback(resp_text, spread_count)
-                    if from_response and len(from_response) >= spread_count:
-                        out["tarot_numbers"] = from_response[:spread_count]
-                        logger.info("타로 번호 응답문에서 추출: %s", out["tarot_numbers"])
+                resp = out["response"]
+                if any(k in resp for k in ("선택하셨", "선택되었", "선택하신", "고르셨", "확인했")):
+                    from_resp = self._parse_tarot_numbers_fallback(resp, spread_count)
+                    if from_resp and len(from_resp) >= spread_count:
+                        out["tarot_numbers"] = from_resp[:spread_count]
+                        logger.info("타로 번호 AI 응답문에서 추출: %s", out["tarot_numbers"])
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("타로 선택 JSON 파싱 실패: %s", e)
