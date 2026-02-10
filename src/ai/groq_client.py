@@ -95,7 +95,8 @@ SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. �
 TAROT_INTERPRET_SYSTEM = """당신은 타로 해석가입니다. 질문과 카드에 맞춰 해석과 시각화 데이터를 JSON으로 출력하세요.
 
 visual_data 작성 규칙 (반드시 지킬 것):
-- scores는 **항상 JSON 배열**이며, **labels 개수와 동일한 개수**의 숫자(0~100)를 넣으세요. 한 개의 숫자로 합치지 말 것.
+- scores는 **세미콜론(;)으로 구분한 문자열**만 사용. 배열·쉼표 말고 이 형식만. 예: "80;70;60;90;75". labels 개수와 같은 개수의 숫자(0~100). 이어쓰지 말 것.
+- interpretation과 그래프 점수가 **일치**해야 함. (추천한 항목의 score가 가장 높게)
 1. **Yes/No 질문** (예: 비 올까? 합격할까?):
    - "visual_type": "yes_no"
    - "recommendation": "YES" 또는 "NO" (또는 "SEMI-YES")
@@ -104,16 +105,16 @@ visual_data 작성 규칙 (반드시 지킬 것):
 2. **양자택일/비교** (예: A가 좋을까 B가 좋을까?):
    - "visual_type": "bar"
    - "labels": ["A 선택", "B 선택"]
-   - "scores": [70, 30]  ← 배열, 항목별 점수
+   - "scores": "70;30"  ← 세미콜론 구분 문자열
 
 3. **종합 운세/일반** (오늘의 운세, 내일 뭐할지 등):
    - "visual_type": "radar"
    - "labels": ["금전", "애정", "건강", "학업/일", "대인관계"] (상황에 맞게 변형 가능)
-   - "scores": [80, 70, 60, 90, 75]  ← labels와 **같은 개수**의 숫자 배열, 각 0~100
+   - "scores": "80;70;60;90;75"  ← 세미콜론 구분, labels와 같은 개수, 각 0~100
 
 출력 예시(JSON 한 줄):
 yes_no: {"interpretation": "...", "tts_text": "...", "visual_data": {"visual_type": "yes_no", "recommendation": "YES", "score": 85}, "soul_color": "#FFD700", "danger_alert": false}
-radar: {"interpretation": "...", "tts_text": "...", "visual_data": {"visual_type": "radar", "labels": ["금전","애정","건강","학업","대인"], "scores": [80,70,60,90,75]}, "soul_color": "#FFD700", "danger_alert": false}"""
+radar: {"interpretation": "...", "tts_text": "...", "visual_data": {"visual_type": "radar", "labels": ["금전","애정","건강","학업","대인"], "scores": "80;70;60;90;75"}, "soul_color": "#FFD700", "danger_alert": false}"""
 
 
 class GroqClient:
@@ -446,33 +447,30 @@ class GroqClient:
             data = json.loads(raw)
 
             v = data.get("visual_data") or {}
-            logger.info("타로 해석 raw visual_data: %s", v)
+            raw_scores = v.get("scores")
+            logger.info("타로 해석 raw visual_data: visual_type=%s, labels=%s, scores=%s", v.get("visual_type"), v.get("labels"), raw_scores)
 
-            # [검증 로직 강화] 데이터가 깨졌거나 조건에 안 맞으면 과감하게 None 처리
-            valid_visual = None
+            # scores가 세미콜론(;) 구분 문자열이면 배열로 변환 (그래프 숫자 붙여 오는 문제 방지)
             labels = v.get("labels") or []
             scores = v.get("scores")
-
-            # 모델이 scores를 한 개 정수로 이어붙여 보낸 경우 복구 시도 (예: [4080603070] → [40,80,60,30,70])
-            if labels and isinstance(scores, list) and len(scores) == 1 and isinstance(scores[0], int):
-                one = scores[0]
-                s = str(one)
-                n = len(labels)
-                if n >= 2 and len(s) == n * 2 and s.isdigit():
-                    try:
-                        scores = [min(100, int(s[i * 2 : (i + 1) * 2])) for i in range(n)]
-                    except (ValueError, IndexError):
-                        pass
-                if isinstance(scores, list) and len(scores) == n:
+            if isinstance(scores, str) and ";" in scores:
+                try:
+                    scores = [min(100, max(0, int(x.strip()))) for x in scores.split(";") if x.strip()]
                     v = {**v, "scores": scores}
+                except ValueError:
+                    scores = None
+            if isinstance(scores, list) and labels and len(scores) == len(labels):
+                v = {**v, "scores": scores}
 
+            valid_visual = None
             # 1. Yes/No 검증
             if v.get("visual_type") == "yes_no" and v.get("recommendation"):
                 valid_visual = v
-            # 2. 막대/레이더 검증 (라벨과 점수 개수가 일치해야 함)
+            # 2. 막대/레이더 검증 (라벨과 점수 개수 일치)
             elif v.get("labels") and v.get("scores") and isinstance(v["scores"], list):
                 if len(v["labels"]) == len(v["scores"]) and len(v["scores"]) > 1:
                     valid_visual = v
+                    logger.info("타로 visual_data 채택: type=%s, labels=%s, scores=%s", v.get("visual_type"), v.get("labels"), v.get("scores"))
 
             if valid_visual is None and v:
                 reason = "yes_no인데 recommendation 없음" if v.get("visual_type") == "yes_no" else \
@@ -500,14 +498,15 @@ class GroqClient:
 
     TAROT_SELECTION_SYSTEM = """현재 타로 번호 선택 단계입니다. 시청자에게 1~78 중 N개를 골라달라고 요청한 상태입니다.
 
-(1) 시청자가 1~78 범위의 정수 번호를 **정확히 N개** 제시했으면 → tarot_numbers에 그 N개 배열을 넣고, response에는 확인 멘트(존댓말). tts_text는 TTS로 자연스러운 문장으로.
+(1) 시청자가 1~78 범위의 정수 번호를 **정확히 N개** 제시했으면 → **반드시** tarot_numbers에 그 N개 배열을 넣고, response에는 확인 멘트(존댓말). tarot_numbers를 비우고 response에만 "N번 선택하셨네요" 쓰면 안 됨. tts_text는 TTS용 문장.
 (2) 시청자가 타로 취소(그만, 안 볼래 등)면 → tarot_cancel true, response에 취소 인사.
 (3) **N개가 안 나오면**(부족, 범위 밖 포함, 중복, 애매함 등) → tarot_numbers 넣지 말고, response에 "처음부터 다시 N개만 골라주세요" 식으로만 재요청. 부분 인식·누적 없음.
 
-1~78 자연수(정수)가 아니면(소수, 분수, 79 이상 등) 인식 안 함 → tarot_numbers 없이 "처음부터 다시 N개 골라주세요"만.
+**tarot_numbers 형식:** 숫자를 **세미콜론(;)으로만** 구분한 문자열. 쉼표나 배열 말고 이 형식만 쓸 것. 예: 시청자 "34 35 56" → tarot_numbers: "34;35;56". "343556"처럼 이어쓰지 말 것.
+**78 초과·비유효:** 1~78이 아닌 수는 인식하지 말고 response에 "처음부터 다시 N개 골라주세요"만. 중복 번호도 같은 재요청.
 emotion: happy, sad, angry, surprised, neutral, excited 중 하나.
-JSON 한 줄: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numbers": [1,2,3] 또는 생략, "tarot_cancel": true 또는 생략}
-예시(인식 시): {"response": "1, 5, 13번 선택하셨네요.", "tts_text": "일, 오, 십삼 번 선택하셨네요.", "emotion": "neutral", "tarot_numbers": [1, 5, 13]}"""
+JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numbers": "34;35;56" 형식 또는 생략, "tarot_cancel": true 또는 생략}
+예시: {"response": "34, 35, 56번 선택하셨네요.", "tts_text": "삼십사, 삼십오, 오십육 번.", "emotion": "neutral", "tarot_numbers": "34;35;56"}"""
 
     def process_tarot_selection(
         self,
@@ -530,9 +529,6 @@ JSON 한 줄: {"response": "...", "tts_text": "...", "emotion": "감정키", "ta
         msg = (user_message or "").strip()
         if not msg:
             return out
-        # 시청자 말에 1~78 번호가 중복으로 들어갔는지 검사 (순서 유지해서 중복만 판별)
-        _all = [int(m) for m in re.findall(r"\d+", msg) if m.isdigit() and 1 <= int(m) <= 78]
-        user_has_duplicate = len(_all) != len(set(_all))
         user_content = f"요청한 개수 N: {spread_count}\n시청자 말: {msg}"
         messages: List[dict] = []
         if context_messages:
@@ -607,7 +603,13 @@ JSON 한 줄: {"response": "...", "tts_text": "...", "emotion": "감정키", "ta
                 out["tarot_cancel"] = True
                 return out
             nums = data.get("tarot_numbers") or data.get("tarotNumbers")
-            if not isinstance(nums, list) and isinstance(nums, str):
+            # 세미콜론(;) 구분 문자열 우선 (AI가 숫자 붙여 보내는 문제 방지)
+            if isinstance(nums, str) and ";" in nums:
+                try:
+                    nums = [int(x.strip()) for x in nums.split(";") if x.strip()]
+                except ValueError:
+                    nums = []
+            elif not isinstance(nums, list) and isinstance(nums, str):
                 nums = [x.strip() for x in nums.replace("，", ",").split(",") if x.strip()]
             has_duplicate = False
             if isinstance(nums, list):
@@ -633,20 +635,61 @@ JSON 한 줄: {"response": "...", "tts_text": "...", "emotion": "감정키", "ta
                 elif len(clean) >= spread_count:
                     out["tarot_numbers"] = clean[:spread_count]
                     logger.info("타로 번호 인식: %s", out["tarot_numbers"])
-            # AI가 JSON에 tarot_numbers를 안 넣은 경우 → 응답 문장에서 번호 추출 (N개만, 부족하면 쓰지 않음)
-            if out["tarot_numbers"] is None and out.get("response") and not has_duplicate:
-                resp = out["response"]
-                from_resp = self._parse_tarot_numbers_fallback(resp, spread_count, return_partial=False)
-                if from_resp and len(from_resp) >= spread_count:
-                    out["tarot_numbers"] = from_resp[:spread_count]
-                    logger.info("타로 번호 AI 응답문에서 추출: %s", out["tarot_numbers"])
-
-            # 시청자 말에 중복 번호가 있으면 무조건 처음부터 다시 뽑으라고 함 (JSON/fallback 경로 상관없이)
-            if user_has_duplicate:
-                out["tarot_numbers"] = None
-                out["response"] = f"중복된 번호가 있어요. 처음부터 다시 {spread_count}개 골라주세요."
-                out["tts_text"] = out["response"]
-                logger.info("타로 번호 시청자 말 중복 감지 → 처음부터 재선택 요청")
+            # AI가 tarot_numbers를 빼먹었고 response가 확인 멘트면 → 이전 응답 + 시청자 말 주고 "tarot_numbers 채워서 JSON 다시 출력" 요청
+            if out["tarot_numbers"] is None and out.get("response") and ("번 선택" in out["response"] or "번 골라" in out["response"]):
+                try:
+                    prev = json.dumps({"response": out["response"], "tts_text": out.get("tts_text") or "", "emotion": out["emotion"]}, ensure_ascii=False)
+                    retry_system = (
+                        "이전 JSON에 tarot_numbers가 빠져있다. tarot_numbers는 **세미콜론(;)으로 구분한 문자열**만 넣을 것. "
+                        "예: 시청자 '34 35 56' → tarot_numbers: \"34;35;56\". 숫자 이어쓰지 말 것."
+                    )
+                    retry_user = f"요청 개수 N: {spread_count}\n시청자 말: {msg}\n\n이전 응답:\n{prev}\n\n위 이전 응답에 tarot_numbers를 \"숫자;숫자;...\" 형식(세미콜론 구분)으로 넣은 JSON 한 줄로 출력."
+                    retry_resp = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": retry_system},
+                            {"role": "user", "content": retry_user},
+                        ],
+                        max_tokens=max_tok,
+                        response_format={"type": "json_object"},
+                    )
+                    retry_raw = (retry_resp.choices[0].message.content or "").strip()
+                    if retry_raw:
+                        retry_data = json.loads(retry_raw)
+                        nums = retry_data.get("tarot_numbers") or retry_data.get("tarotNumbers")
+                        if isinstance(nums, str):
+                            try:
+                                nums = json.loads(nums)
+                            except json.JSONDecodeError:
+                                nums = None
+                        if isinstance(nums, list) and len(nums) >= spread_count:
+                            out["tarot_numbers"] = [int(x) if not isinstance(x, int) else x for x in nums[:spread_count]]
+                            logger.info("타로 번호 AI 재요청으로 채움: %s", out["tarot_numbers"])
+                        elif isinstance(nums, list) and len(nums) > 0:
+                            # [3419]처럼 잘못 온 경우 → AI에게 그대로 보여주고 "N개 별도 번호로 다시" 한 번 더 요청
+                            wrong_json = json.dumps(retry_data, ensure_ascii=False)
+                            fix_resp = self._client.chat.completions.create(
+                                model=self.model,
+                                messages=[
+                                    {"role": "system", "content": "tarot_numbers를 **세미콜론(;)으로 구분한 문자열**로 수정. 예: \"34;35;56\". 숫자 이어쓰지 말 것. 같은 JSON 한 줄로 출력."},
+                                    {"role": "user", "content": f"요청 개수 N: {spread_count}\n시청자 말: {msg}\n\n잘못된 응답:\n{wrong_json}\n\ntarot_numbers만 \"숫자;숫자;숫자\" 형식(세미콜론 구분)으로 고친 JSON 한 줄로 출력."},
+                                ],
+                                max_tokens=max_tok,
+                                response_format={"type": "json_object"},
+                            )
+                            fix_raw = (fix_resp.choices[0].message.content or "").strip()
+                            if fix_raw:
+                                fix_data = json.loads(fix_raw)
+                                fix_nums = fix_data.get("tarot_numbers") or fix_data.get("tarotNumbers")
+                                if isinstance(fix_nums, list) and len(fix_nums) >= spread_count:
+                                    out["tarot_numbers"] = [int(x) if not isinstance(x, int) else x for x in fix_nums[:spread_count]]
+                                    logger.info("타로 번호 AI 수정 요청으로 채움: %s", out["tarot_numbers"])
+                                else:
+                                    logger.warning("타로 수정 요청 후에도 tarot_numbers 부족: %s", fix_raw[:200])
+                        else:
+                            logger.warning("타로 재요청 응답에 tarot_numbers 없음 또는 부족: %s", retry_raw[:200])
+                except (json.JSONDecodeError, TypeError, Exception) as retry_e:
+                    logger.warning("타로 tarot_numbers 재요청 실패: %s", retry_e)
 
             return out
         except (json.JSONDecodeError, TypeError) as e:
