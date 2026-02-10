@@ -240,6 +240,9 @@ class GroqClient:
         user_content = f"채팅 목록:\n{content}"
         if not tarot_enabled:
             user_content += "\n\n[오늘은 타로/운세 기능 비활성화. 지금 당장 타로 해달라고 요청하면 거절하고 action 넣지 말 것. \"내일은 되나\", \"언제 되나\"처럼 다음에 가능한지·일정을 묻는 말에는 문맥에 맞게 답할 것 (예: 내일/다음 방송 때는 될 수 있다고).]"
+        elif tarot_state and tarot_state.get("phase") in ("selecting", "revealed"):
+            requester = tarot_state.get("requester_nickname") or "다른 분"
+            user_content += f"\n\n[현재 타로 진행 중. {requester}님이 보고 있는 중이므로, 새로 \"타로 봐줘\" 요청한 사람에게는 거절하고 \"지금 다른 분이 보고 있어서 지금은 안 됩니다\" 같은 한 문장만 답할 것. action 절대 넣지 말 것. 지금 타로 보는 사람(요청자)이 번호 등을 말한 내용만 타로 선택으로 처리하고, 그 외 사람의 타로 요청은 위처럼 거절만.]"
         elif tarot_state and tarot_state.get("phase") == "asking_question":
             user_content += "\n\n[현재 타로 단계: 시청자가 \"뭐에 대해 볼지\"에 답한 상태. 위 채팅이 그 답변. 주제를 말했으면 action \"tarot\", tarot_question에 주제, **tarot_spread_count에 주제에 맞는 장수(1~5)를 반드시 넣을 것.** 예/아니오 질문→1, 단순 주제→3, 장기·복잡→5. response에는 그 주제로 볼게요 + 1~78 중 N개 골라달라는 멘트를 존댓말로. 거절·모르겠음·없음이면 일반 답변만, action 넣지 말 것.]"
 
@@ -599,14 +602,18 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                 if len(clean) >= spread_count:
                     out["tarot_numbers"] = clean[:spread_count]
                     logger.info("타로 번호 인식: %s", out["tarot_numbers"])
-            # AI가 번호 확인 멘트는 했는데 JSON에 tarot_numbers를 안 넣은 경우 → 응답 문장에서만 추출(사용자 말 X)
+            # AI가 JSON에 tarot_numbers를 안 넣은 경우 → 응답 문장에서 번호 추출 (전체 또는 부분)
             if out["tarot_numbers"] is None and out.get("response"):
                 resp = out["response"]
-                if any(k in resp for k in ("선택하셨", "선택되었", "선택하신", "고르셨", "확인했")):
-                    from_resp = self._parse_tarot_numbers_fallback(resp, spread_count)
-                    if from_resp and len(from_resp) >= spread_count:
+                from_resp = self._parse_tarot_numbers_fallback(resp, spread_count, return_partial=True)
+                if from_resp:
+                    if len(from_resp) >= spread_count:
                         out["tarot_numbers"] = from_resp[:spread_count]
                         logger.info("타로 번호 AI 응답문에서 추출: %s", out["tarot_numbers"])
+                    else:
+                        # 부분만 인식(예: 77, 65) → pending_numbers로 저장되도록
+                        out["tarot_numbers"] = from_resp
+                        logger.info("타로 번호 AI 응답문에서 부분 추출(누적용): %s", out["tarot_numbers"])
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("타로 선택 JSON 파싱 실패: %s", e)
@@ -655,11 +662,21 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
             s = s.replace(k, v)
         return s
 
-    def _parse_tarot_numbers_fallback(self, text: str, spread_count: int) -> Optional[List[int]]:
-        """숫자만 추출. 한글(하나/다섯/십삼 등)은 먼저 숫자로 치환. 123→[1,2,3], 1 2 3→[1,2,3]."""
+    def _parse_tarot_numbers_fallback(
+        self, text: str, spread_count: int, return_partial: bool = False
+    ) -> Optional[List[int]]:
+        """숫자만 추출. 'N번' 패턴을 먼저 쓰고, 한글(하나/다섯/십삼 등)은 숫자로 치환.
+        return_partial True면 N개 미만이어도 찾은 번호만 반환(누적용). '3장' 같은 건 번호로 안 씀."""
         import re
-        normalized = self._korean_numbers_to_digits(text or "")
         out: List[int] = []
+        # "77번과 65번"처럼 카드 번호만 추출 (3장·한 장 등 제외)
+        for m in re.findall(r"(\d+)\s*번", text or ""):
+            n = int(m)
+            if 1 <= n <= 78 and n not in out:
+                out.append(n)
+                if len(out) >= spread_count:
+                    return out[:spread_count]
+        normalized = self._korean_numbers_to_digits(text or "")
         for m in re.findall(r"\d+", normalized):
             n = int(m)
             if 1 <= n <= 78 and n not in out:
@@ -685,6 +702,8 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                     if len(out) >= spread_count:
                         return out[:spread_count]
                     break
+        if return_partial and out:
+            return out
         return out[:spread_count] if len(out) >= spread_count else None
 
     def parse_tarot_card_numbers(

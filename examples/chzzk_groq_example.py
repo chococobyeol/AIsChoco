@@ -141,6 +141,28 @@ async def idle_worker(
             next_leg = now + leg_interval + random.uniform(-4, 4)
 
 
+async def tarot_timeout_worker():
+    """revealed 1분 만료 / failed 표시 만료 시 주기적으로 타로 상태 초기화 (메인 루프는 queue.get 대기라 채팅 없으면 체크 안 함)."""
+    while True:
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            break
+        tarot = overlay_state.get("tarot")
+        if not tarot or not isinstance(tarot, dict):
+            continue
+        phase = tarot.get("phase")
+        now = time.time()
+        if phase == "failed":
+            until = tarot.get("failed_until_ts") or 0
+            if until and now >= until:
+                overlay_state["tarot"] = None
+        elif phase == "revealed":
+            reset_at = tarot.get("auto_reset_at_ts") or 0
+            if reset_at and now >= reset_at:
+                overlay_state["tarot"] = None
+
+
 async def reply_worker(
     queue: asyncio.Queue,
     groq_client: GroqClient,
@@ -185,6 +207,18 @@ async def reply_worker(
 
             # ----- 타로 "뭐에 대해 볼지" 단계는 AI 판단으로 처리: 일반 채팅으로 넘겨 reply_batch에서 tarot_state 전달
 
+            # ----- 타로 실패 표시 후 초기화
+            if tarot and tarot.get("phase") == "failed":
+                until = tarot.get("failed_until_ts") or 0
+                if time.time() >= until:
+                    overlay_state["tarot"] = None
+                    continue
+            # ----- 타로 해석 공개 후 1분 지나면 자동 리셋
+            if tarot and tarot.get("phase") == "revealed":
+                reset_at = tarot.get("auto_reset_at_ts") or 0
+                if reset_at and time.time() >= reset_at:
+                    overlay_state["tarot"] = None
+                    continue
             # ----- 타로 선택 단계: 타임아웃 체크
             if tarot and tarot.get("phase") == "selecting":
                 deadline = tarot.get("select_deadline_ts") or 0
@@ -326,14 +360,24 @@ async def reply_worker(
                                     logger.warning("타로 해석 TTS 실패: %s", tts_e)
                                 finally:
                                     is_speaking[0] = False
+                                # TTS 끝난 뒤 1분 후 자동 리셋 (오버레이에서 타이머 표시용)
+                                t = overlay_state.get("tarot")
+                                if isinstance(t, dict) and t.get("phase") == "revealed":
+                                    t["auto_reset_at_ts"] = time.time() + 60
                             else:
                                 logger.warning("타로 해석 실패: get_tarot_interpretation 반환 없음 (Groq/JSON 오류)")
-                                overlay_state["tarot"] = None
+                                fail_msg = "이번에는 해석을 불러오지 못했어요."
+                                overlay_state["tarot"] = {
+                                    "visible": True,
+                                    "phase": "failed",
+                                    "message": fail_msg,
+                                    "failed_until_ts": time.time() + 5,
+                                }
                                 try:
                                     path = await asyncio.to_thread(
                                         _tts_synthesize_only,
                                         tts_service,
-                                        "이번에는 해석을 불러오지 못했어요.",
+                                        fail_msg,
                                         "neutral",
                                         "Korean",
                                     )
@@ -395,9 +439,13 @@ async def reply_worker(
                 chat_history.add_assistant_message(ai_response.response)
                 print(f"  → [감정:{ai_response.emotion}] {ai_response.response}")
 
-                # ----- Groq가 타로 액션을 반환한 경우: 상태 설정 후 TTS만
+                # ----- Groq가 타로 액션을 반환한 경우: 진행 중(selecting/revealed)이면 새 타로로 덮어쓰지 않음
                 action = getattr(ai_response, "action", None)
-                if action == "tarot_ask_question":
+                current_phase = (tarot_state or {}).get("phase")
+                if current_phase in ("selecting", "revealed"):
+                    # 진행 중에는 action이 와도 타로 상태 유지 (AI는 거절 멘트 반환했을 것)
+                    pass
+                elif action == "tarot_ask_question":
                     first_msg = pending_msgs[0] if pending_msgs else None
                     if first_msg:
                         overlay_state["tarot"] = {
@@ -528,6 +576,7 @@ async def main():
             queue, groq_client, tts_service, vts_client, chat_history, is_speaking
         )
     )
+    tarot_timeout_task = asyncio.create_task(tarot_timeout_worker())
     idle_task: Optional[asyncio.Task] = None
     if vts_client:
         idle_task = asyncio.create_task(idle_worker(vts_client, is_speaking))
@@ -571,10 +620,15 @@ async def main():
         pass
     finally:
         worker_task.cancel()
+        tarot_timeout_task.cancel()
         if idle_task is not None:
             idle_task.cancel()
         try:
             await worker_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await tarot_timeout_task
         except asyncio.CancelledError:
             pass
         if idle_task is not None:

@@ -293,6 +293,9 @@ TAROT_HTML = """<!DOCTYPE html>
     .phase-reveal .card-img { width: 100px; height: auto; border-radius: 6px; }
     .phase-reveal .interpretation { flex: 1; min-width: 200px; padding: 10px; background: rgba(255,255,255,0.9); border-radius: 8px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
     .phase-reveal .visual { margin-top: 8px; font-size: 12px; color: #64748b; }
+    .phase-reveal .reveal-footer { margin-top: 10px; font-size: 13px; color: #64748b; }
+    .phase-reveal .reveal-timer { font-weight: bold; color: #334155; }
+    .phase-failed { text-align: center; padding: 20px; color: #64748b; }
     .hidden { display: none; }
   </style>
 </head>
@@ -316,9 +319,16 @@ TAROT_HTML = """<!DOCTYPE html>
         if (tarot.phase === "selecting") {
           var need = tarot.spread_count || 3;
           var hintText = need === 1 ? '1~78번 중 번호 하나만 골라주세요.' : ('1~78번 중 번호 ' + need + '개 골라주세요.');
+          var deadline = tarot.select_deadline_ts || 0;
+          var nowSec = Date.now() / 1000;
+          var remain = Math.max(0, Math.floor(deadline - nowSec));
+          var min = Math.floor(remain / 60);
+          var sec = remain % 60;
+          var timeStr = (min > 0 ? min + '분 ' : '') + sec + '초';
           el.innerHTML = '<div class="phase-select">' +
             '<img class="deck-img" src="' + base + '/tarot-assets/tarot_back.png" alt="덱" onerror="this.style.display=\\'none\\'">' +
             '<div class="hint">' + hintText + '</div>' +
+            (deadline ? '<div class="requester">남은 시간 ' + timeStr + '</div>' : '') +
             (tarot.requester_nickname ? '<div class="requester">' + (tarot.requester_nickname || "") + '님</div>' : '') +
             '</div>';
           el.className = "tarot-panel";
@@ -330,10 +340,24 @@ TAROT_HTML = """<!DOCTYPE html>
           }).join("");
           var interp = (tarot.interpretation || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
           var visual = tarot.visual_data ? '<div class="visual">[시각화] ' + (tarot.visual_data.visual_type || "") + '</div>' : "";
+          var footer = '';
+          if (tarot.auto_reset_at_ts) {
+            var nowSec = Date.now() / 1000;
+            var left = Math.max(0, Math.floor(tarot.auto_reset_at_ts - nowSec));
+            var m = Math.floor(left / 60);
+            var s = left % 60;
+            footer = '<div class="reveal-footer">궁금하신 점이 있으면 말씀해주세요. <span class="reveal-timer">' + m + ':' + (s < 10 ? '0' : '') + s + '</span> 후 자동으로 닫힙니다.</div>';
+          }
           el.innerHTML = '<div class="phase-reveal">' +
             '<div class="cards">' + cardsHtml + '</div>' +
-            '<div class="interpretation">' + interp + visual + '</div>' +
+            '<div class="interpretation">' + interp + visual + footer + '</div>' +
             '</div>';
+          el.className = "tarot-panel";
+          return;
+        }
+        if (tarot.phase === "failed") {
+          var msg = (tarot.message || "해석을 불러오지 못했어요.").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          el.innerHTML = '<div class="phase-failed">' + msg + '</div>';
           el.className = "tarot-panel";
           return;
         }
