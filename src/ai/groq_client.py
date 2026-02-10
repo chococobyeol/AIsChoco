@@ -75,15 +75,28 @@ replies는 최대 1개. emotion은 반드시: happy, sad, angry, surprised, neut
 
 SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. 중요한 맥락과 주제는 유지하세요. 한국어로 한 문단 이내."""
 
-TAROT_INTERPRET_SYSTEM = """당신은 타로 해석가입니다. 주어진 카드와 질문에 맞춰 해석과 시각화 데이터를 JSON으로만 출력하세요.
-출력 형식 (한 줄 JSON, 설명 없이):
-{"interpretation": "해석 전문 텍스트 (한국어, 화면 표시용)", "tts_text": "해석과 같은 내용을 TTS로 읽었을 때 한국어로 자연스럽게 들리도록 말하기 좋은 문장", "visual_data": {"visual_type": "radar_fixed"|"radar_dynamic"|"yes_no"|"keywords"|"candidates"|"decision_map", ...타입별 필드}, "soul_color": "gold"|"purple"|"black"|"neutral", "danger_alert": true|false}
-- visual_type이 radar_fixed면: "labels": ["애정","금전","사업/학업","건강","행운"], "scores": [0~100 5개]
-- radar_dynamic이면: "labels": ["라벨1","라벨2","라벨3"], "scores": [0~100 3개]
-- yes_no이면: "recommendation": "YES"|"NO", "score": 0~100
-- keywords이면: "keywords": ["#키워드1","#키워드2","#키워드3"]
-- soul_color: 분위기(밝으면 gold, 주의면 purple/black)
-- danger_alert: Death/Tower 등 위험 카드가 있으면 true"""
+# src/ai/groq_client.py 의 TAROT_INTERPRET_SYSTEM 변수를 이걸로 교체하세요.
+
+TAROT_INTERPRET_SYSTEM = """당신은 타로 해석가입니다. 질문과 카드에 맞춰 해석과 시각화 데이터를 JSON으로 출력하세요.
+
+visual_data 작성 규칙:
+1. **Yes/No 질문** (예: 비 올까? 합격할까? 재회할까?):
+   - "visual_type": "yes_no"
+   - "recommendation": "YES" 또는 "NO" (또는 "SEMI-YES")
+   - "score": 긍정 확률 (0~100)
+
+2. **양자택일/비교** (예: A가 좋을까 B가 좋을까?):
+   - "visual_type": "bar"
+   - "labels": ["A 선택", "B 선택"]
+   - "scores": [A점수, B점수]
+
+3. **종합 운세/일반** (오늘의 운세, 연애운 등):
+   - "visual_type": "radar"
+   - "labels": ["금전", "애정", "건강", "학업/일", "대인관계"] (상황에 맞게 변형 가능)
+   - "scores": [점수1, 점수2, 점수3, 점수4, 점수5]
+
+출력 예시(JSON 한 줄):
+{"interpretation": "해석내용...", "tts_text": "읽을내용...", "visual_data": {"visual_type": "yes_no", "recommendation": "YES", "score": 85}, "soul_color": "#FFD700", "danger_alert": false}"""
 
 
 class GroqClient:
@@ -356,23 +369,21 @@ class GroqClient:
         question: str,
         cards: List[dict],
     ) -> Optional[dict]:
-        """
-        선택된 타로 카드와 질문으로 해석 + visual_data 생성.
-        cards: [{"id": "fool", "reversed": False}, ...]
-        Returns: {"interpretation": str, "visual_data": dict, "soul_color": str?, "danger_alert": bool?} or None
-        """
         if not cards:
             return None
+
         cards_desc = ", ".join(
-            f"{c.get('id', '')}" + ("(역방)" if c.get("reversed") else "")
+            f"{c.get('id', '')}" + ("(역방향)" if c.get("reversed") else "")
             for c in cards
         )
-        user_content = f"질문: {question or '(없음)'}\n뽑은 카드: {cards_desc}\n\n위 카드로 질문에 대해 해석하고, JSON 한 줄만 출력하세요."
+
+        user_content = f"질문: {question}\n뽑은 카드: {cards_desc}\n상황에 맞는 visual_data를 포함해 JSON으로 답하세요."
 
         messages = [
             {"role": "system", "content": self._system_prompt(TAROT_INTERPRET_SYSTEM)},
             {"role": "user", "content": user_content},
         ]
+
         try:
             response = self._client.chat.completions.create(
                 model=self.model,
@@ -381,79 +392,33 @@ class GroqClient:
                 response_format={"type": "json_object"},
             )
             raw = (response.choices[0].message.content or "").strip()
-        except Exception as e:
-            err_msg = str(e).lower()
-            if "400" in err_msg and "json_validate_failed" in err_msg:
-                failed_gen = _extract_failed_generation(e)
-                if failed_gen:
-                    feedback = "[JSON 검증 실패] 아래 출력을 유효한 JSON 한 줄로만 다시 출력하세요.\n\n실패한 출력:\n" + (failed_gen[:2000] if len(failed_gen) > 2000 else failed_gen)
-                else:
-                    feedback = "[JSON 검증 실패] 이전 응답이 JSON 검증에 실패했습니다. interpretation, visual_data 등 요청한 형식만 한 줄 JSON으로 출력하세요."
-                retry_messages = messages + [{"role": "user", "content": feedback}]
-                try:
-                    response = self._client.chat.completions.create(
-                        model=self.model,
-                        messages=retry_messages,
-                        max_tokens=1024,
-                        response_format={"type": "json_object"},
-                    )
-                    raw = (response.choices[0].message.content or "").strip()
-                except Exception as retry_e:
-                    logger.warning("타로 해석 피드백 재시도 실패, response_format 없이 재시도: %s", retry_e)
-                    try:
-                        response = self._client.chat.completions.create(
-                            model=self.model,
-                            messages=messages,
-                            max_tokens=1024,
-                        )
-                        raw = (response.choices[0].message.content or "").strip()
-                        if raw:
-                            raw = raw.split("```")[0].strip()
-                            if len(raw) > 2000:
-                                raw = raw[:2000].rsplit(".", 1)[0] + "." if "." in raw[:2000] else raw[:2000]
-                            return {
-                                "interpretation": raw or "(해석 없음)",
-                                "visual_data": {"visual_type": "keywords", "keywords": []},
-                                "soul_color": "neutral",
-                                "danger_alert": False,
-                            }
-                    except Exception as fallback_e:
-                        logger.exception("타로 해석 폴백 실패: %s", fallback_e)
-                        return None
-            else:
-                logger.exception("타로 해석 Groq 호출 실패: %s", e)
-                return None
-
-        try:
             if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1] if "\n" in raw else raw[3:]
-            if raw.endswith("```"):
-                raw = raw.rsplit("```", 1)[0].strip()
+                raw = raw.split("\n", 1)[-1].replace("```", "").strip()
             data = json.loads(raw)
-            interpretation = (data.get("interpretation") or "").strip()
-            tts_text = (data.get("tts_text") or "").strip()
-            visual_data = data.get("visual_data")
-            if not isinstance(visual_data, dict):
-                visual_data = {"visual_type": "keywords", "keywords": []}
-            result = {
-                "interpretation": interpretation or "(해석 없음)",
-                "visual_data": visual_data,
-                "soul_color": data.get("soul_color") or "neutral",
+
+            v = data.get("visual_data") or {}
+
+            # [검증 로직 강화] 데이터가 깨졌거나 조건에 안 맞으면 과감하게 None 처리
+            valid_visual = None
+
+            # 1. Yes/No 검증
+            if v.get("visual_type") == "yes_no" and v.get("recommendation"):
+                valid_visual = v
+            # 2. 막대/레이더 검증 (라벨과 점수 개수가 일치해야 함)
+            elif v.get("labels") and v.get("scores") and isinstance(v["scores"], list):
+                if len(v["labels"]) == len(v["scores"]) and len(v["scores"]) > 1:
+                    valid_visual = v
+
+            return {
+                "interpretation": data.get("interpretation") or "해석을 불러오는 중입니다.",
+                "tts_text": data.get("tts_text"),
+                "visual_data": valid_visual,
+                "soul_color": data.get("soul_color") or "#a855f7",
                 "danger_alert": bool(data.get("danger_alert")),
             }
-            if tts_text:
-                result["tts_text"] = tts_text
-            return result
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning("타로 해석 JSON 파싱 실패, 원문을 해석으로 사용: %s", e)
-            if raw and len(raw.strip()) > 10:
-                raw_clean = raw.strip().split("```")[0].strip()[:2000]
-                return {
-                    "interpretation": raw_clean or "(해석 없음)",
-                    "visual_data": {"visual_type": "keywords", "keywords": []},
-                    "soul_color": "neutral",
-                    "danger_alert": False,
-                }
+
+        except Exception as e:
+            logger.error("타로 해석 실패: %s", e)
             return None
 
     TAROT_NUMBERS_SYSTEM = """사용자가 타로 카드 번호를 말했습니다. 1~78 사이 번호를 아래에서 요청한 개수(N개)만큼만 추출하세요.

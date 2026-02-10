@@ -372,7 +372,12 @@ TAROT_HTML = """<!DOCTYPE html>
 """
 
 
+_TAROT_HTML_PATH = Path(__file__).resolve().parent / "tarot_overlay.html"
+
+
 @app.get("/tarot", response_class=HTMLResponse)
 def tarot_page():
     """타로 전용 오버레이. OBS 브라우저 소스에 http://127.0.0.1:8765/tarot 로 추가."""
+    if _TAROT_HTML_PATH.is_file():
+        return HTMLResponse(_TAROT_HTML_PATH.read_text(encoding="utf-8"))
     return HTMLResponse(TAROT_HTML)

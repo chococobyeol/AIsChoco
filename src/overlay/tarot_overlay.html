@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Tarot Overlay Clean</title>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+  <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body { 
+      font-family: 'Pretendard', sans-serif; 
+      background: transparent; 
+      overflow: hidden; 
+      width: 100vw; height: 100vh;
+      color: white;
+    }
+
+    #dimmer {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.85);
+      opacity: 0; transition: opacity 0.5s; z-index: 0;
+    }
+    #dimmer.active { opacity: 1; }
+
+    #app { position: relative; width: 100%; height: 100%; z-index: 1; }
+
+    /* [1] 선택 단계 */
+    .phase-select {
+      position: absolute; width: 100%; height: 100%;
+      display: flex; flex-direction: column; justify-content: flex-end;
+      padding-bottom: 80px; 
+    }
+    .select-info { position: absolute; top: 20%; width: 100%; text-align: center; }
+    .select-title { font-size: 34px; font-weight: bold; color: #fbbf24; text-shadow: 0 4px 10px black; }
+    .select-sub { font-size: 20px; color: #cbd5e1; margin-top: 10px; }
+
+    .deck-area { position: relative; width: 100%; height: 300px; bottom: 20px; }
+    .card-fan-item {
+      position: absolute; width: 60px; height: 100px;
+      background: url('/tarot-assets/tarot_back.png') no-repeat center/cover;
+      border-radius: 5px; bottom: 0; left: 50%;
+      transform-origin: 50% 150%;
+      box-shadow: -2px 2px 5px rgba(0,0,0,0.5);
+    }
+    .card-fan-item.picked {
+      bottom: 50px; border: 2px solid #fbbf24; box-shadow: 0 0 15px #fbbf24; z-index: 100;
+    }
+
+    /* [2] 결과 단계 */
+    .phase-reveal {
+      position: absolute; top: 50%; left: 50%; 
+      transform: translate(-50%, -50%);
+      width: 95%; max-width: 1300px;
+      display: flex; flex-direction: column; align-items: center;
+    }
+
+    .cards-container {
+      display: flex; justify-content: center; gap: 20px;
+      margin-bottom: 20px; height: 230px; width: 100%;
+    }
+
+    .card-slot {
+      width: 140px; height: 230px;
+      background-size: cover; background-position: center;
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+      border: 1px solid rgba(255,255,255,0.2);
+      background-image: url('/tarot-assets/tarot_back.png');
+      opacity: 0; transform: translateY(20px);
+    }
+
+    /* 결과 패널 */
+    .result-panel {
+      display: flex; width: 100%;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 16px; padding: 25px; gap: 25px;
+      box-shadow: 0 20px 50px black;
+      opacity: 0; height: 280px; 
+    }
+
+    .text-col {
+      /* 기본 flex: 2지만, 그래프 없으면 JS로 flex: 1 (전체)로 변경됨 */
+      flex: 2; color: #f1f5f9; white-space: pre-wrap; 
+      overflow: hidden; font-size: 19px; line-height: 1.5;
+    }
+
+    .graph-col {
+      flex: 1; min-width: 300px;
+      border-left: 2px solid rgba(255,255,255,0.1); 
+      padding-left: 20px; 
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+    }
+
+    .bar-chart { display: flex; align-items: flex-end; height: 160px; gap: 8px; width: 100%; justify-content: space-around; }
+    .bar-col { display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; flex: 1; }
+    .bar-stick { width: 70%; background: linear-gradient(to top, #8b5cf6, #c4b5fd); border-radius: 4px 4px 0 0; height: 0; transition: height 1s ease-out; }
+    .bar-txt { font-size: 13px; margin-top: 8px; color: #cbd5e1; text-align: center; white-space: nowrap; }
+
+    .yesno-box { text-align: center; width: 100%; }
+    .yesno-big { font-size: 50px; font-weight: bold; margin-bottom: 10px; text-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+    .yesno-sub { font-size: 20px; color: #cbd5e1; }
+    
+    .fail-msg { position: absolute; top: 50%; width: 100%; text-align: center; font-size: 28px; color: #f87171; }
+  </style>
+</head>
+<body>
+
+<div id="dimmer"></div>
+<div id="app"></div>
+
+<script>
+  const base = window.location.origin || (window.location.protocol + "//" + window.location.host);
+  let lastKey = null;
+
+  function getImg(id, rev) {
+    if (!id) return base + '/tarot-assets/tarot_back.png';
+    const folder = rev ? '/reverse/' : '/';
+    const suffix = rev ? '_r.png' : '.png';
+    return base + '/tarot-assets' + folder + 'tarot_' + id + suffix;
+  }
+
+  setInterval(() => {
+    fetch(base + '/api/state').then(r => r.json()).then(d => {
+      const t = d.tarot;
+      if (!t || !t.visible) {
+        if (lastKey) {
+          document.getElementById('app').innerHTML = '';
+          document.getElementById('dimmer').classList.remove('active');
+          lastKey = null;
+        }
+        return;
+      }
+      const key = `${t.phase}_${(t.selected_indices||[]).join('-')}_${t.question}`;
+      if (lastKey !== key) {
+        lastKey = key;
+        render(t);
+      }
+      updateTimer(t);
+    }).catch(() => {});
+  }, 500);
+
+  function render(t) {
+    const app = document.getElementById('app');
+    const dimmer = document.getElementById('dimmer');
+    app.innerHTML = '';
+    dimmer.classList.add('active');
+
+    // [1] 선택 단계
+    if (t.phase === 'selecting') {
+      const count = t.spread_count || 3;
+      app.innerHTML = `
+        <div class="phase-select">
+          <div class="select-info">
+            <div class="select-title">${t.requester_nickname || '시청자'}님의 타로 (${count}장)</div>
+            <div class="select-sub" id="timer-disp"></div>
+          </div>
+          <div class="deck-area" id="deck"></div>
+        </div>`;
+      
+      const deck = document.getElementById('deck');
+      const angleTotal = 90;
+      for(let i=1; i<=78; i++) {
+        const el = document.createElement('div');
+        el.className = 'card-fan-item';
+        const angle = (-angleTotal/2) + (angleTotal/77)*(i-1);
+        const isPicked = (t.pending_numbers||[]).includes(i);
+        el.style.transform = `translate(-50%, ${isPicked?'-40px':'0'}) rotate(${angle}deg)`;
+        if(isPicked) el.classList.add('picked');
+        el.style.zIndex = i;
+        deck.appendChild(el);
+      }
+    }
+
+    // [2] 결과 단계
+    else if (t.phase === 'revealed') {
+      const cards = t.cards || [];
+      const indices = t.selected_indices || [];
+
+      let cardsHtml = '';
+      indices.forEach((idx, i) => cardsHtml += `<div class="card-slot" id="card-${i}"></div>`);
+
+      // 그래프 데이터가 있는지 확인
+      const hasGraph = t.visual_data && (
+        t.visual_data.visual_type === 'yes_no' || 
+        (t.visual_data.labels && t.visual_data.scores)
+      );
+
+      // 그래프가 없으면 graph-col을 아예 안 그림
+      const graphHtml = hasGraph ? `<div class="graph-col" id="graph"></div>` : '';
+
+      app.innerHTML = `
+        <div class="phase-reveal">
+          <div class="cards-container">${cardsHtml}</div>
+          <div class="result-panel" id="panel">
+            <div class="text-col" id="text-col">${(t.interpretation || "").replace(/\n/g, "<br>")}</div>
+            ${graphHtml}
+            <div style="position:absolute; bottom:10px; right:20px; color:#64748b; font-size:14px;" id="reveal-timer"></div>
+          </div>
+        </div>`;
+
+      // 텍스트 영역 스타일 조정 (그래프 없으면 넓게)
+      const textEl = document.getElementById('text-col');
+      if (!hasGraph) {
+        textEl.style.flex = "1"; // 전체 너비 사용
+      }
+
+      // 글자 크기 자동 조절
+      const textLen = (t.interpretation || "").length;
+      if (textLen > 400) textEl.style.fontSize = "16px";
+      else if (textLen > 300) textEl.style.fontSize = "17px";
+
+      // 그래프 그리기 (있을 때만)
+      if (hasGraph) {
+        drawGraph(t.visual_data);
+      }
+
+      // 애니메이션
+      const tl = gsap.timeline();
+      tl.to('#panel', { opacity: 1, y: 0, duration: 0.5 });
+      tl.to('.card-slot', { opacity: 1, y: 0, duration: 0.3, stagger: 0.1 }, "-=0.2");
+
+      indices.forEach((_, i) => {
+        const c = cards[i] || {};
+        const realSrc = getImg(c.id, c.reversed);
+        const rotation = c.reversed ? 'rotate(180deg)' : 'rotate(0deg)';
+        
+        tl.to(`#card-${i}`, { 
+          scaleX: 0, duration: 0.2, ease: "power1.in",
+          onComplete: () => {
+            const el = document.getElementById(`card-${i}`);
+            if(el) {
+              el.style.backgroundImage = `url('${realSrc}')`;
+              el.style.transform = rotation;
+            }
+          }
+        });
+        tl.to(`#card-${i}`, { scaleX: 1, duration: 0.3, ease: "back.out(1.5)" });
+      });
+    }
+
+    else if (t.phase === 'failed') {
+      app.innerHTML = `<div class="fail-msg">${t.message}</div>`;
+    }
+  }
+
+  function drawGraph(v) {
+    const el = document.getElementById('graph');
+    if (!el) return; // 요소가 없으면(데이터가 없어서 안 그렸으면) 리턴
+
+    if (v.visual_type === 'yes_no') {
+      const isYes = (v.recommendation === 'YES');
+      const color = isYes ? '#4ade80' : '#f87171';
+      el.innerHTML = `
+        <div class="yesno-box">
+          <div class="yesno-big" style="color:${color}">${v.recommendation}</div>
+          <div class="yesno-sub">확률: ${v.score || 0}%</div>
+        </div>`;
+    }
+    else if (v.labels && v.scores) {
+      let html = '<div class="bar-chart">';
+      const len = Math.min(v.labels.length, v.scores.length, 5);
+      for(let i=0; i<len; i++) {
+        html += `
+          <div class="bar-col">
+            <div class="bar-stick" id="bar-${i}"></div>
+            <div class="bar-txt">${v.labels[i]}</div>
+          </div>`;
+      }
+      html += '</div>';
+      el.innerHTML = html;
+      setTimeout(() => {
+        for(let i=0; i<len; i++) {
+          const b = document.getElementById(`bar-${i}`);
+          if(b) b.style.height = (v.scores[i]||0) + '%';
+        }
+      }, 500);
+    }
+  }
+
+  function updateTimer(t) {
+    if (t.phase === 'selecting') {
+      const el = document.getElementById('timer-disp');
+      if (el && t.select_deadline_ts) {
+        el.innerText = '남은 시간: ' + Math.max(0, Math.floor(t.select_deadline_ts - Date.now()/1000));
+      }
+    } else if (t.phase === 'revealed') {
+      const el = document.getElementById('reveal-timer');
+      if (el && t.auto_reset_at_ts) {
+        el.innerText = '자동 종료: ' + Math.max(0, Math.floor(t.auto_reset_at_ts - Date.now()/1000));
+      }
+    }
+  }
+</script>
+</body>
+</html>

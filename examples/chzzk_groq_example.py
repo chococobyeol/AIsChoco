@@ -325,6 +325,7 @@ async def reply_worker(
                                     "phase": "revealed",
                                     "question": question,
                                     "cards": chosen,
+                                    "selected_indices": list(numbers[:spread_count]),
                                     "interpretation": result["interpretation"],
                                     "visual_data": result.get("visual_data") or {},
                                     "soul_color": result.get("soul_color"),
