@@ -13,7 +13,7 @@ Apple Silicon 맥에서 Qwen3-TTS(Voice Cloning)를 돌리고, aischoco가 **원
 - **Python 3.10+**
 - **ffmpeg**: `brew install ffmpeg`
 - **모델**: Qwen3-TTS Base(Voice Cloning) MLX 8bit 모델이 `models/` 아래에 있어야 함 (아래 “모델 준비” 참고)
-- **참조 음성**: `ref.wav` + `ref_text.txt` (aischoco의 `assets/voice_samples/` 와 동일한 파일 사용 권장)
+- **참조 음성**: `ref.wav` + `ref_text.txt`. 감정별로 `ref_<emotion>.wav`·`ref_text_<emotion>.txt` 넣으면 해당 감정 요청 시 사용 (예: `ref_angry.wav`, `ref_text_angry.txt`)
 
 ---
 
@@ -57,7 +57,7 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx
 
 ```bash
 pip install "huggingface_hub[cli]"
-hf download mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit --local-dir models/Qwen3-TTS-12Hz-1.7B-Base-8bit
+hf download mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit --local-dir models/Qwen3-TTS-12Hz-0.6B-Base-8bit
 # 또는 0.6B: --local-dir models/Qwen3-TTS-12Hz-0.6B-Base-8bit
 ```
 
@@ -69,14 +69,16 @@ mac_tts_server/
 │   └── Qwen3-TTS-12Hz-1.7B-Base-8bit/   # 또는 0.6B
 │       └── (모델 파일들: config.json, *.safetensors 등)
 ├── refs/
-│   ├── ref.wav
-│   └── ref_text.txt
+│   ├── ref.wav              # 기본(neutral)
+│   ├── ref_text.txt
+│   ├── ref_angry.wav        # 선택: 감정별 ref (ref_text_angry.txt 등)
+│   └── ref_text_angry.txt
 ├── server.py
 └── ...
 ```
 
 **이미 [qwen3-tts-apple-silicon](https://github.com/kapi2800/qwen3-tts-apple-silicon)으로 모델을 받아 두었다면** 그 경로를 쓰면 됩니다:  
-`export REF_MODEL_PATH=~/qwen3-tts-apple-silicon/models/Qwen3-TTS-12Hz-1.7B-Base-8bit`
+`export REF_MODEL_PATH=~/qwen3-tts-apple-silicon/models/Qwen3-TTS-12Hz-0.6B-Base-8bit`
 
 ---
 

@@ -6,15 +6,22 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.overlay.state import overlay_state
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_TAROT_ASSETS = _PROJECT_ROOT / "assets" / "tarot"
+
 logger = logging.getLogger(__name__)
 app = FastAPI(title="AIsChoco Overlay", docs_url=None, redoc_url=None)
+if _TAROT_ASSETS.is_dir():
+    app.mount("/tarot-assets", StaticFiles(directory=str(_TAROT_ASSETS)), name="tarot_assets")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,14 +32,16 @@ app.add_middleware(
 
 @app.get("/api/state")
 def get_state():
-    """오버레이: 시청자 채팅 컬럼 / AI 답변 컬럼, 방장채팅 숨김 설정 반환."""
+    """오버레이: 시청자 채팅 컬럼 / AI 답변 컬럼, 방장채팅 숨김 설정, 타로 상태 반환."""
     viewer = list(overlay_state.get("viewer_messages") or [])
     assistant = list(overlay_state.get("assistant_messages") or [])
     ignore = bool(overlay_state.get("ignore_streamer_chat"))
+    tarot = overlay_state.get("tarot")
     return JSONResponse({
         "viewer_messages": viewer,
         "assistant_messages": assistant,
         "ignore_streamer_chat": ignore,
+        "tarot": tarot,
     })
 
 
@@ -52,6 +61,14 @@ def clear_chat():
     overlay_state["assistant_messages"] = []
     overlay_state["_next_id"] = 0
     logger.info("Overlay API: clear")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/tarot/clear")
+def clear_tarot():
+    """타로 오버레이 상태 초기화."""
+    overlay_state["tarot"] = None
+    logger.info("Overlay API: tarot clear")
     return JSONResponse({"ok": True})
 
 
@@ -255,3 +272,83 @@ OVERLAY_HTML = """<!DOCTYPE html>
 def overlay_page():
     """OBS 브라우저 소스에 넣을 URL. 채팅/대사를 폴링해 표시."""
     return HTMLResponse(OVERLAY_HTML)
+
+
+TAROT_HTML = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>타로 오버레이</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: "Malgun Gothic", sans-serif; background: transparent; color: #1e293b; min-height: 100vh; padding: 12px; }
+    .tarot-panel { max-width: 90vw; margin: 0 auto; }
+    .phase-select { text-align: center; padding: 20px; }
+    .phase-select .deck-img { max-width: 180px; border-radius: 8px; }
+    .phase-select .hint { margin-top: 12px; font-size: 15px; color: #334155; }
+    .phase-select .requester { font-size: 13px; color: #64748b; margin-top: 6px; }
+    .phase-reveal { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+    .phase-reveal .cards { display: flex; gap: 8px; flex-wrap: wrap; }
+    .phase-reveal .card-img { width: 100px; height: auto; border-radius: 6px; }
+    .phase-reveal .interpretation { flex: 1; min-width: 200px; padding: 10px; background: rgba(255,255,255,0.9); border-radius: 8px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+    .phase-reveal .visual { margin-top: 8px; font-size: 12px; color: #64748b; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="tarot-panel" id="tarot-panel"></div>
+  <script>
+    var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
+    function cardSrc(id, reversed) {
+      var path = reversed ? "/tarot-assets/reverse/tarot_" + id + "_r.png" : "/tarot-assets/tarot_" + id + ".png";
+      return base + path;
+    }
+    function render() {
+      fetch(base + "/api/state").then(function(r) { return r.json(); }).then(function(data) {
+        var tarot = data.tarot || null;
+        var el = document.getElementById("tarot-panel");
+        if (!tarot || !tarot.visible) {
+          el.innerHTML = "";
+          el.className = "tarot-panel";
+          return;
+        }
+        if (tarot.phase === "selecting") {
+          var need = tarot.spread_count || 3;
+          var hintText = need === 1 ? '1~78번 중 번호 하나만 골라주세요.' : ('1~78번 중 번호 ' + need + '개 골라주세요.');
+          el.innerHTML = '<div class="phase-select">' +
+            '<img class="deck-img" src="' + base + '/tarot-assets/tarot_back.png" alt="덱" onerror="this.style.display=\\'none\\'">' +
+            '<div class="hint">' + hintText + '</div>' +
+            (tarot.requester_nickname ? '<div class="requester">' + (tarot.requester_nickname || "") + '님</div>' : '') +
+            '</div>';
+          el.className = "tarot-panel";
+          return;
+        }
+        if (tarot.phase === "revealed" && tarot.cards && tarot.cards.length) {
+          var cardsHtml = tarot.cards.map(function(c) {
+            return '<img class="card-img" src="' + cardSrc(c.id, c.reversed) + '" alt="' + (c.id || "") + '">';
+          }).join("");
+          var interp = (tarot.interpretation || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          var visual = tarot.visual_data ? '<div class="visual">[시각화] ' + (tarot.visual_data.visual_type || "") + '</div>' : "";
+          el.innerHTML = '<div class="phase-reveal">' +
+            '<div class="cards">' + cardsHtml + '</div>' +
+            '<div class="interpretation">' + interp + visual + '</div>' +
+            '</div>';
+          el.className = "tarot-panel";
+          return;
+        }
+        el.innerHTML = "";
+      }).catch(function() { document.getElementById("tarot-panel").innerHTML = ""; });
+    }
+    render();
+    setInterval(render, 500);
+  </script>
+</body>
+</html>
+"""
+
+
+@app.get("/tarot", response_class=HTMLResponse)
+def tarot_page():
+    """타로 전용 오버레이. OBS 브라우저 소스에 http://127.0.0.1:8765/tarot 로 추가."""
+    return HTMLResponse(TAROT_HTML)

@@ -25,7 +25,7 @@ _SERVER_DIR = Path(__file__).resolve().parent
 _DEFAULT_REF_DIR = str(_SERVER_DIR / "refs")
 
 MODELS_DIR = os.environ.get("MODELS_DIR", os.path.join(os.getcwd(), "models"))
-MODEL_FOLDER = os.environ.get("MODEL_FOLDER", "Qwen3-TTS-12Hz-1.7B-Base-8bit")
+MODEL_FOLDER = os.environ.get("MODEL_FOLDER", "Qwen3-TTS-12Hz-0.6B-Base-8bit")
 REF_MODEL_PATH = os.environ.get("REF_MODEL_PATH", "").strip() or None
 REF_AUDIO_PATH = os.environ.get("REF_AUDIO_PATH", "").strip() or None
 REF_TEXT_PATH = os.environ.get("REF_TEXT_PATH", "").strip() or None
@@ -49,15 +49,24 @@ def get_model_path() -> str | None:
     return full
 
 
-def get_ref_audio_and_text() -> tuple[str | None, str | None]:
-    """ref.wav 경로와 ref_text 문자열 반환."""
+def get_ref_audio_and_text(emotion: str | None = None) -> tuple[str | None, str | None]:
+    """감정에 따라 ref_<emotion>.wav / ref_text_<emotion>.txt 사용, 없으면 ref.wav / ref_text.txt."""
     ref_audio = REF_AUDIO_PATH
     ref_text_path = REF_TEXT_PATH
-    if REF_AUDIO_DIR:
-        d = Path(REF_AUDIO_DIR)
-        if not ref_audio and (d / "ref.wav").exists():
+    d = Path(REF_AUDIO_DIR) if REF_AUDIO_DIR else None
+    emotion = (emotion or "neutral").strip().lower()
+    if d and not ref_audio:
+        # 감정별: ref_angry.wav, ref_happy.wav 등
+        emotion_file = d / f"ref_{emotion}.wav"
+        if emotion != "neutral" and emotion_file.exists():
+            ref_audio = str(emotion_file)
+        elif (d / "ref.wav").exists():
             ref_audio = str(d / "ref.wav")
-        if not ref_text_path and (d / "ref_text.txt").exists():
+    if d and not ref_text_path:
+        emotion_txt = d / f"ref_text_{emotion}.txt"
+        if emotion != "neutral" and emotion_txt.exists():
+            ref_text_path = str(emotion_txt)
+        elif (d / "ref_text.txt").exists():
             ref_text_path = str(d / "ref_text.txt")
     if not ref_audio or not os.path.isfile(ref_audio):
         return None, None
@@ -70,7 +79,8 @@ def get_ref_audio_and_text() -> tuple[str | None, str | None]:
 
 class SynthesizeRequest(BaseModel):
     text: str = ""
-    emotion: str = "neutral"
+    emotion: str = "neutral"  # ref_<emotion>.wav / ref_text_<emotion>.txt 사용, 없으면 ref.wav
+    language: str = "Korean"  # 한국어 발음용. 클라이언트에서 전달하지 않으면 Korean 사용
 
 
 _model = None
@@ -99,7 +109,7 @@ def synthesize(req: SynthesizeRequest):
     if not text:
         return Response(content=b"", status_code=400, media_type="text/plain")
 
-    ref_audio, ref_text = get_ref_audio_and_text()
+    ref_audio, ref_text = get_ref_audio_and_text(req.emotion)
     if not ref_audio or not ref_text:
         logger.warning(
             "503: ref 미설정. REF_AUDIO_DIR=%s, ref.wav 존재=%s, ref_text.txt 존재=%s",
@@ -124,15 +134,58 @@ def synthesize(req: SynthesizeRequest):
 
     from mlx_audio.tts.generate import generate_audio
 
+    # 클라이언트가 보낸 값 확인용 로그 (문제 추적 시 활용)
+    raw_lang = (req.language or "Korean").strip() or "Korean"
+    logger.info("synthesize 요청: text=%d자, language=%s", len(text), raw_lang)
+
+    # mlx_audio CLI는 --lang_code spanish 형태로 전체 이름 사용. "ko"만 넘기면 무시되어 기본(일본어) 적용될 수 있음.
+    # 전체 이름 우선, 그다음 ISO 코드 시도.
+    _LANG_FULL = {"korean": "korean", "ko": "korean", "english": "english", "en": "english", "japanese": "japanese", "ja": "japanese"}
+    _LANG_ISO = {"korean": "ko", "ko": "ko", "english": "en", "en": "en", "japanese": "ja", "ja": "ja"}
+    key = raw_lang.lower() if len(raw_lang) > 3 else raw_lang.lower()
+    lang_full = _LANG_FULL.get(key, "korean" if key in ("ko", "korean") or not key else key)
+    lang_iso = _LANG_ISO.get(key, "ko" if key in ("ko", "korean") or not key else key)
+
     tmp = tempfile.mkdtemp(prefix="tts_")
     try:
-        generate_audio(
+        kwargs = dict(
             model=model,
             text=text,
             ref_audio=ref_audio,
             ref_text=ref_text,
             output_path=tmp,
         )
+        # 한국어 등: lang_code에 전체 이름("korean") 우선 시도 → 무시되면 "ko" 시도. 둘 다 실패 시 언어 없이 호출하면 일본어 기본값 됨.
+        if lang_full and lang_full != "english":
+            done = False
+            for lang_val in (lang_full, lang_iso):
+                for param_name in ("lang_code", "language"):
+                    kwargs[param_name] = lang_val
+                    try:
+                        generate_audio(**kwargs)
+                        done = True
+                        break
+                    except TypeError:
+                        kwargs.pop(param_name, None)
+                if done:
+                    break
+            if not done:
+                logger.warning("generate_audio에 lang_code/language 미지원, language=%s 무시됨(기본값 사용)", raw_lang)
+                generate_audio(
+                    model=model,
+                    text=text,
+                    ref_audio=ref_audio,
+                    ref_text=ref_text,
+                    output_path=tmp,
+                )
+        else:
+            generate_audio(
+                model=model,
+                text=text,
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+                output_path=tmp,
+            )
         wav_path = os.path.join(tmp, "audio_000.wav")
         if not os.path.isfile(wav_path):
             return Response(content=b"generate_audio did not produce audio_000.wav", status_code=500)
@@ -148,7 +201,7 @@ def synthesize(req: SynthesizeRequest):
 
 @app.get("/health")
 def health():
-    ref_audio, ref_text = get_ref_audio_and_text()
+    ref_audio, ref_text = get_ref_audio_and_text(None)
     ref_dir = REF_AUDIO_DIR
     ref_ok = ref_audio is not None and ref_text is not None
     return {

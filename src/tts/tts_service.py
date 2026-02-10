@@ -33,6 +33,39 @@ def emotion_to_instruct(emotion: str) -> str:
     return EMOTION_TO_INSTRUCT.get(emotion.strip().lower(), "")
 
 
+# 1~78 한글 읽기 (TTS에서 1번→일 번, 78번→칠십팔 번으로 읽히도록)
+_NUM_KOR = (
+    "", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구",
+    "십", "십일", "십이", "십삼", "십사", "십오", "십육", "십칠", "십팔", "십구",
+    "이십", "이십일", "이십이", "이십삼", "이십사", "이십오", "이십육", "이십칠", "이십팔", "이십구",
+    "삼십", "삼십일", "삼십이", "삼십삼", "삼십사", "삼십오", "삼십육", "삼십칠", "삼십팔", "삼십구",
+    "사십", "사십일", "사십이", "사십삼", "사십사", "사십오", "사십육", "사십칠", "사십팔", "사십구",
+    "오십", "오십일", "오십이", "오십삼", "오십사", "오십오", "오십육", "오십칠", "오십팔", "오십구",
+    "육십", "육십일", "육십이", "육십삼", "육십사", "육십오", "육십육", "육십칠", "육십팔", "육십구",
+    "칠십", "칠십일", "칠십이", "칠십삼", "칠십사", "칠십오", "칠십육", "칠십칠", "칠십팔",
+)
+_NUM_KOR_CNT = ("", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉", "열")
+
+
+def text_for_tts_numbers(text: str) -> str:
+    """TTS용: '1번'→'일 번', '78번'→'칠십팔 번', '3개'→'세 개' 등으로 바꿔서 한번이 아닌 일번으로 읽히게 함. 표시용 텍스트는 그대로 두고 TTS에만 이 결과를 넘기면 됨."""
+    if not text or not text.strip():
+        return text
+    import re
+    s = text
+    # N번 (1~78) → 한글 번 (긴 숫자부터 치환해 7번이 7번으로만 매칭되게)
+    for n in range(78, 0, -1):
+        if n < len(_NUM_KOR):
+            kor = _NUM_KOR[n]
+            s = re.sub(rf"(?<!\d){n}(?!\d)\s*번", f"{kor} 번", s)
+    # N개 (1~10) → 한/두/세 개
+    for n in range(10, 0, -1):
+        if n < len(_NUM_KOR_CNT):
+            kor = _NUM_KOR_CNT[n]
+            s = re.sub(rf"(?<!\d){n}(?!\d)\s*개", f"{kor} 개", s)
+    return s
+
+
 def _default_ref_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "assets" / "voice_samples"
 
@@ -146,18 +179,26 @@ class TTSService:
         self._model = Qwen3TTSModel.from_pretrained(self.model_id, **load_kwargs)
         return self._model
 
-    def _synthesize_remote(self, text: str, emotion: str = "neutral") -> Tuple[list, int]:
-        """원격 TTS API 호출 (Colab 등)."""
+    def _synthesize_remote(
+        self,
+        text: str,
+        emotion: str = "neutral",
+        language: Optional[str] = None,
+    ) -> Tuple[list, int]:
+        """원격 TTS API 호출 (Colab 등). language 미지정 시 self.language 사용."""
         import httpx
         import numpy as np
         import soundfile as sf
 
         url = f"{self.tts_remote_url.rstrip('/')}/synthesize"
-        # 첫 실행 시 Colab에서 모델/라이브러리 설치로 지연되므로 타임아웃 5분
         timeout = float(os.environ.get("TTS_REMOTE_TIMEOUT", "300"))
+        lang = (language or getattr(self, "language", None) or "Korean").strip() or "Korean"
         try:
             with httpx.Client(timeout=timeout) as client:
-                resp = client.post(url, json={"text": text, "emotion": emotion})
+                resp = client.post(
+                    url,
+                    json={"text": text, "emotion": emotion, "language": lang},
+                )
                 resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             logger.warning("원격 TTS 실패 %s: %s", e.response.status_code, e.response.text[:200])
@@ -185,7 +226,8 @@ class TTSService:
             return [np.array([], dtype=np.float32)], 24000
 
         if self.tts_remote_url:
-            wavs, sr = self._synthesize_remote(text.strip(), emotion)
+            lang = language or self.language
+            wavs, sr = self._synthesize_remote(text.strip(), emotion, language=lang)
             if wavs and len(wavs[0]) > 0:
                 return wavs, sr
             logger.warning("원격 TTS 실패, 로컬로 전환합니다.")
@@ -277,9 +319,10 @@ class TTSService:
         emotion: str = "neutral",
         out_path: Optional[Union[Path, str]] = None,
         play: bool = True,
+        language: Optional[str] = None,
     ) -> Path:
-        """합성 후 wav 저장. play=True면 저장 직후 재생."""
-        wavs, sr = self.synthesize(text, emotion=emotion)
+        """합성 후 wav 저장. play=True면 저장 직후 재생. language 지정 시 원격/로컬 모두 적용."""
+        wavs, sr = self.synthesize(text, emotion=emotion, language=language)
         if out_path is None:
             out_path = _default_ref_dir() / "latest_reply.wav"
         out_path = Path(out_path)

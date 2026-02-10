@@ -17,6 +17,22 @@ from .models import AIResponse, VALID_EMOTIONS
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_failed_generation(err: Exception) -> str:
+    """Groq 400 json_validate_failed 시 에러 본문에서 failed_generation 추출."""
+    try:
+        body = getattr(err, "body", None)
+        if isinstance(body, dict):
+            return (body.get("error") or {}).get("failed_generation") or ""
+        if hasattr(err, "response") and err.response is not None:
+            resp = getattr(err, "response", None)
+            if hasattr(resp, "json"):
+                data = resp.json()
+                return (data.get("error") or {}).get("failed_generation") or ""
+    except Exception:
+        pass
+    return ""
+
 # config/character.txt 가 있으면 시스템 프롬프트 앞에 붙임
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
@@ -45,11 +61,28 @@ emotion은 반드시 다음 중 하나: happy, sad, angry, surprised, neutral, e
 BATCH_SYSTEM_PROMPT = """아래는 말하는 동안 들어온 채팅 목록입니다.
 도배·스팸만 무시하고, 채팅이 있으면 반드시 답변 하나 생성하세요. 짧은 한마디(예: 그냥 알아, ㅇㅇ)에도 한 문장으로 응답하세요.
 정말 답할 수 없는 경우에만 replies를 빈 배열로 두세요.
-설명·생각·추론 없이, 아래 형식의 JSON 한 줄만 출력하세요.
-{"replies": [{"response": "한 문장(길어도 됨)", "emotion": "감정키"}]}
-replies는 최대 1개. emotion은 반드시: happy, sad, angry, surprised, neutral, excited 중 하나."""
+
+타로(운세) 관련:
+- "타로 봐줘" / "타로 봐달라"처럼 주제 없이만 말한 경우: 반드시 "뭐에 대해 볼지"만 물어라. 번호(1~78 등) 말하면 안 됨. action "tarot_ask_question"만.
+- 시청자가 이미 주제를 말했을 때만: 그 주제로 타로 보겠다고 한 뒤, 1~78 중 번호 N개를 골라달라고 요청하는 멘트를 반드시 존댓말로, 매번 표현을 다르게 자연스럽게 (예: 그 주제로 볼게요. 1번부터 78번 중 N개만 골라주세요. / 좋아요, 그럼 그걸로 해볼게요. 1~78 중 N개만 골라주실래요? / 알겠어요, 그 주제로 볼게요. 번호 N개만 골라주세요. 등). action "tarot", tarot_question에 주제, tarot_spread_count에 장수. 뽑을 장수: "한 장만"/"1장" → 1, "3장"/말 없음 → 3, "5장" → 5 (1~5만, 생략 시 3).
+- 주제를 안 말했거나 거절이면 일반 답변만, action 없음.
+- 일반 대화면 action 생략.
+
+JSON 형식 (한 줄, 설명 없이):
+{"replies": [{"response": "한 문장(화면 표시용)", "tts_text": "TTS 읽기용, 같은 내용을 숫자·약어를 자연스러운 한글로 읽는 문장(선택)", "emotion": "감정키", "action": "tarot_ask_question"|"tarot"|생략, "tarot_question": "주제"|""|생략, "tarot_spread_count": 1|3|5|생략}]}
+replies는 최대 1개. emotion은 반드시: happy, sad, angry, surprised, neutral, excited 중 하나. tts_text 없으면 response로 TTS."""
 
 SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. 중요한 맥락과 주제는 유지하세요. 한국어로 한 문단 이내."""
+
+TAROT_INTERPRET_SYSTEM = """당신은 타로 해석가입니다. 주어진 카드와 질문에 맞춰 해석과 시각화 데이터를 JSON으로만 출력하세요.
+출력 형식 (한 줄 JSON, 설명 없이):
+{"interpretation": "해석 전문 텍스트 (한국어, 화면 표시용)", "tts_text": "해석과 같은 내용을 TTS 읽기용으로 숫자·약어를 자연스러운 한글로 읽는 문장", "visual_data": {"visual_type": "radar_fixed"|"radar_dynamic"|"yes_no"|"keywords"|"candidates"|"decision_map", ...타입별 필드}, "soul_color": "gold"|"purple"|"black"|"neutral", "danger_alert": true|false}
+- visual_type이 radar_fixed면: "labels": ["애정","금전","사업/학업","건강","행운"], "scores": [0~100 5개]
+- radar_dynamic이면: "labels": ["라벨1","라벨2","라벨3"], "scores": [0~100 3개]
+- yes_no이면: "recommendation": "YES"|"NO", "score": 0~100
+- keywords이면: "keywords": ["#키워드1","#키워드2","#키워드3"]
+- soul_color: 분위기(밝으면 gold, 주의면 purple/black)
+- danger_alert: Death/Tower 등 위험 카드가 있으면 true"""
 
 
 class GroqClient:
@@ -182,10 +215,14 @@ class GroqClient:
         self,
         pending: List[Any],
         context_messages: Optional[List[dict]] = None,
+        tarot_state: Optional[dict] = None,
+        tarot_enabled: bool = True,
     ) -> List[AIResponse]:
         """
         말하는 동안 쌓인 채팅을 한 번에 보고, 합치기/걸러내기 후 답변 1개 생성 (길어도 됨).
         pending: .user, .message 속성 있는 객체 리스트 (ChatMessage 등).
+        tarot_state: 현재 타로 상태. phase가 "asking_question"이면 방금 채팅이 "뭐에 대해 볼지"에 대한 답이므로, 주제면 action tarot, 거절/모르겠음이면 action 없이 일반 답변.
+        tarot_enabled: False면 타로 기능 비활성화. 타로 요청해도 AI가 거절만 하도록 안내.
         """
         if not pending:
             return []
@@ -199,12 +236,19 @@ class GroqClient:
         if not content.strip():
             return []
 
+        user_content = f"채팅 목록:\n{content}"
+        if not tarot_enabled:
+            user_content += "\n\n[오늘은 타로/운세 기능 비활성화. 지금 당장 타로 해달라고 요청하면 거절하고 action 넣지 말 것. \"내일은 되나\", \"언제 되나\"처럼 다음에 가능한지·일정을 묻는 말에는 문맥에 맞게 답할 것 (예: 내일/다음 방송 때는 될 수 있다고).]"
+        elif tarot_state and tarot_state.get("phase") == "asking_question":
+            user_content += "\n\n[현재 타로 단계: 시청자가 \"뭐에 대해 볼지\"에 답한 상태. 위 채팅이 그 답변. 주제를 말했으면 action \"tarot\", tarot_question에 주제, tarot_spread_count에 장수(1~5), response에는 그 주제로 볼게요 + 1~78 중 N개 골라달라는 멘트를 반드시 존댓말로, 매번 다르게 자연스럽게. 거절·모르겠음·없음이면 일반 답변만, action 넣지 말 것.]"
+
         messages = [{"role": "system", "content": self._system_prompt(BATCH_SYSTEM_PROMPT)}]
         if context_messages:
             messages.extend(context_messages)
-        messages.append({"role": "user", "content": f"채팅 목록:\n{content}"})
+        messages.append({"role": "user", "content": user_content})
 
         start = time.perf_counter()
+        raw = None
         try:
             response = self._client.chat.completions.create(
                 model=self.model,
@@ -213,13 +257,43 @@ class GroqClient:
                 response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content
-            elapsed = time.perf_counter() - start
         except Exception as e:
-            logger.exception("Groq batch 호출 실패: %s", e)
+            err_msg = str(e).lower()
+            if "400" in err_msg and "json_validate_failed" in err_msg:
+                failed_gen = _extract_failed_generation(e)
+                if failed_gen:
+                    feedback = (
+                        "[JSON 검증 실패] 아래 출력이 유효한 JSON이 아니었습니다. "
+                        "같은 내용을 반드시 유효한 JSON 한 줄로만 다시 출력하세요. 마크다운·설명 없이.\n\n실패한 출력:\n"
+                        + (failed_gen[:2000] if len(failed_gen) > 2000 else failed_gen)
+                    )
+                else:
+                    feedback = (
+                        "[JSON 검증 실패] 이전 응답이 JSON 검증에 걸렸습니다. "
+                        "반드시 요청한 형식({\"replies\": [{\"response\": \"...\", \"emotion\": \"...\", ...}]})만 한 줄로 출력하세요. 마크다운·설명·추가 문자 없이."
+                    )
+                logger.warning("Groq JSON 검증 실패, 피드백 담아 재시도: %s", e)
+                retry_messages = messages + [{"role": "user", "content": feedback}]
+                try:
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=retry_messages,
+                        max_tokens=1024,
+                        response_format={"type": "json_object"},
+                    )
+                    raw = response.choices[0].message.content
+                except Exception as retry_e:
+                    logger.exception("Groq batch 피드백 재시도 실패: %s", retry_e)
+                    return []
+            else:
+                logger.exception("Groq batch 호출 실패: %s", e)
+                return []
+        elapsed = time.perf_counter() - start
+        if not raw or not raw.strip():
             return []
 
         try:
-            text = raw.strip()
+            text = (raw or "").strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
             if text.endswith("```"):
@@ -243,9 +317,437 @@ class GroqClient:
                 e = (item.get("emotion") or "neutral").strip().lower()
                 if e not in VALID_EMOTIONS:
                     e = "neutral"
+                action = (item.get("action") or "").strip() or None
+                if action and action not in ("tarot_ask_question", "tarot"):
+                    action = None
+                tarot_question = (item.get("tarot_question") or "").strip() or None
+                raw_spread = item.get("tarot_spread_count")
+                spread_count = None
+                if raw_spread is not None:
+                    try:
+                        spread_count = int(raw_spread)
+                        if spread_count < 1 or spread_count > 5:
+                            spread_count = 3
+                    except (TypeError, ValueError):
+                        spread_count = 3
                 if r:
-                    out.append(AIResponse(response=r, emotion=e, confidence=1.0, processing_time=elapsed))
+                    tts_text = (item.get("tts_text") or "").strip()
+                    out.append(AIResponse(
+                        response=r,
+                        emotion=e,
+                        confidence=1.0,
+                        processing_time=elapsed,
+                        action=action,
+                        tarot_question=tarot_question,
+                        tarot_spread_count=spread_count,
+                        tts_text=tts_text or None,
+                    ))
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("Groq batch JSON 파싱 실패: %s", e)
             return []
+
+    def get_tarot_interpretation(
+        self,
+        question: str,
+        cards: List[dict],
+    ) -> Optional[dict]:
+        """
+        선택된 타로 카드와 질문으로 해석 + visual_data 생성.
+        cards: [{"id": "fool", "reversed": False}, ...]
+        Returns: {"interpretation": str, "visual_data": dict, "soul_color": str?, "danger_alert": bool?} or None
+        """
+        if not cards:
+            return None
+        cards_desc = ", ".join(
+            f"{c.get('id', '')}" + ("(역방)" if c.get("reversed") else "")
+            for c in cards
+        )
+        user_content = f"질문: {question or '(없음)'}\n뽑은 카드: {cards_desc}\n\n위 카드로 질문에 대해 해석하고, JSON 한 줄만 출력하세요."
+
+        messages = [
+            {"role": "system", "content": self._system_prompt(TAROT_INTERPRET_SYSTEM)},
+            {"role": "user", "content": user_content},
+        ]
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=1024,
+                response_format={"type": "json_object"},
+            )
+            raw = (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "400" in err_msg and "json_validate_failed" in err_msg:
+                failed_gen = _extract_failed_generation(e)
+                if failed_gen:
+                    feedback = "[JSON 검증 실패] 아래 출력을 유효한 JSON 한 줄로만 다시 출력하세요.\n\n실패한 출력:\n" + (failed_gen[:2000] if len(failed_gen) > 2000 else failed_gen)
+                else:
+                    feedback = "[JSON 검증 실패] 이전 응답이 JSON 검증에 실패했습니다. interpretation, visual_data 등 요청한 형식만 한 줄 JSON으로 출력하세요."
+                retry_messages = messages + [{"role": "user", "content": feedback}]
+                try:
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=retry_messages,
+                        max_tokens=1024,
+                        response_format={"type": "json_object"},
+                    )
+                    raw = (response.choices[0].message.content or "").strip()
+                except Exception as retry_e:
+                    logger.warning("타로 해석 피드백 재시도 실패, response_format 없이 재시도: %s", retry_e)
+                    try:
+                        response = self._client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            max_tokens=1024,
+                        )
+                        raw = (response.choices[0].message.content or "").strip()
+                        if raw:
+                            raw = raw.split("```")[0].strip()
+                            if len(raw) > 2000:
+                                raw = raw[:2000].rsplit(".", 1)[0] + "." if "." in raw[:2000] else raw[:2000]
+                            return {
+                                "interpretation": raw or "(해석 없음)",
+                                "visual_data": {"visual_type": "keywords", "keywords": []},
+                                "soul_color": "neutral",
+                                "danger_alert": False,
+                            }
+                    except Exception as fallback_e:
+                        logger.exception("타로 해석 폴백 실패: %s", fallback_e)
+                        return None
+            else:
+                logger.exception("타로 해석 Groq 호출 실패: %s", e)
+                return None
+
+        try:
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw.rsplit("```", 1)[0].strip()
+            data = json.loads(raw)
+            interpretation = (data.get("interpretation") or "").strip()
+            tts_text = (data.get("tts_text") or "").strip()
+            visual_data = data.get("visual_data")
+            if not isinstance(visual_data, dict):
+                visual_data = {"visual_type": "keywords", "keywords": []}
+            result = {
+                "interpretation": interpretation or "(해석 없음)",
+                "visual_data": visual_data,
+                "soul_color": data.get("soul_color") or "neutral",
+                "danger_alert": bool(data.get("danger_alert")),
+            }
+            if tts_text:
+                result["tts_text"] = tts_text
+            return result
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("타로 해석 JSON 파싱 실패, 원문을 해석으로 사용: %s", e)
+            if raw and len(raw.strip()) > 10:
+                raw_clean = raw.strip().split("```")[0].strip()[:2000]
+                return {
+                    "interpretation": raw_clean or "(해석 없음)",
+                    "visual_data": {"visual_type": "keywords", "keywords": []},
+                    "soul_color": "neutral",
+                    "danger_alert": False,
+                }
+            return None
+
+    TAROT_NUMBERS_SYSTEM = """사용자가 타로 카드 번호를 말했습니다. 1~78 사이 번호를 아래에서 요청한 개수(N개)만큼만 추출하세요.
+- 숫자: 123 → [1,2,3], 1 2 3, 12 34 56 78 5 (5장이면 5개)
+- 한글: 일 십삼 오십 → [1,13,50], 이십일, 삼십, 사십오 등
+- 요청한 N개만 순서대로. 없거나 부족하면 빈 배열.
+반드시 JSON 한 줄만: {"numbers": [1, 13, 50]} (개수는 사용자 요청 N에 맞춤)"""
+
+    TAROT_SELECTION_SYSTEM = """현재 타로 번호 선택 단계입니다. 시청자에게 1~78 중 N개를 골라달라고 요청한 상태에서 시청자가 말한 내용을 자연어로 이해하세요.
+**중요: 시청자가 1~78 번호를 제시했으면 반드시 tarot_numbers에 정수 배열을 넣어야 합니다. (예: "123"→[1,2,3], "하나 다섯 십삼"→[1,5,13], "1 5 13"→[1,5,13]) 생략하면 안 됨.**
+"이미 고른 번호"가 있으면 이번에 말한 번호와 합쳐서 총 N개가 되도록 tarot_numbers에 **전체 번호 배열**을 넣으세요.
+
+(1) 시청자가 1~78 범위의 **정수** 번호를 제시했으면 → **반드시** tarot_numbers에 [전체 N개] 넣고, response에는 그걸 확인하는 짧은 한 문장(존댓말). tts_text에는 같은 내용을 TTS 읽기용으로 숫자를 한글로(1→일, 13→십삼) 읽는 문장.
+(2) 시청자가 타로를 하지 않겠다는 의도(취소, 그만, 안 볼래 등)면 → tarot_cancel을 true로 하고, response에는 취소 인사 한 문장(존댓말).
+(3) 시청자가 "결과 알려줘", "답변해" 등 해석을 요구하면 → tarot_numbers 없이, response에 이유 한 줄 설명 후 재요청. tts_text는 response와 동일하거나 읽기 좋게.
+(4) 번호가 아니거나 부족/애매하면 → tarot_numbers 없이, response에 왜 인식 안 됐는지 한 줄 설명 후 재요청. tts_text는 response와 동일.
+
+emotion: happy, sad, angry, surprised, neutral, excited 중 하나.
+JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS 읽기용(숫자 한글 읽기)", "emotion": "감정키", "tarot_numbers": [1,2,3] 또는 생략, "tarot_cancel": true 또는 생략}
+예시(번호 인식 시): {"response": "1, 5, 13번 선택하셨네요.", "tts_text": "일, 다섯, 십삼 번 선택하셨네요.", "emotion": "neutral", "tarot_numbers": [1, 5, 13]}"""
+
+    def process_tarot_selection(
+        self,
+        user_message: str,
+        spread_count: int = 3,
+        context_messages: Optional[List[dict]] = None,
+        pending_numbers: Optional[List[int]] = None,
+    ) -> dict:
+        """
+        타로 번호 선택 단계에서 시청자 말을 AI로 해석. 키워드 없이 자연어 처리.
+        pending_numbers: 이전 턴에 이미 고른 번호(예: [19,22]). 있으면 이번 말과 합쳐서 N개가 되면 반환.
+        Returns: {"response": str, "emotion": str, "tarot_numbers": list|None, "tarot_cancel": bool}
+        """
+        out: dict = {
+            "response": "1번부터 78번까지 번호 %s개만 골라주세요." % spread_count,
+            "emotion": "neutral",
+            "tarot_numbers": None,
+            "tarot_cancel": False,
+        }
+        msg = (user_message or "").strip()
+        pending = [int(x) for x in (pending_numbers or []) if isinstance(x, (int, float)) and 1 <= int(x) <= 78]
+        pending = list(dict.fromkeys(pending))[:spread_count]
+        if pending:
+            user_content = f"이미 고른 번호: {', '.join(map(str, pending))}. 아직 부족한 개수: {spread_count - len(pending)}개. 요청한 총 개수 N: {spread_count}\n시청자 이번 말: {msg or '(추가로 고름)'}"
+        elif not msg:
+            return out
+        else:
+            user_content = f"요청한 개수 N: {spread_count}\n시청자 말: {msg}"
+        messages: List[dict] = []
+        if context_messages:
+            messages.extend(context_messages[-6:])
+        messages.append({"role": "user", "content": user_content})
+        system = self._system_prompt(self.TAROT_SELECTION_SYSTEM)
+        api_messages = [{"role": "system", "content": system}, *messages]
+        # 토큰 여유 필요 (JSON + tts_text 등). 256이면 'max completion tokens reached' 발생 가능
+        max_tok = 512
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=api_messages,
+                max_tokens=max_tok,
+                response_format={"type": "json_object"},
+            )
+            raw = (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "400" in err_msg and "json_validate_failed" in err_msg:
+                failed_gen = _extract_failed_generation(e)
+                if failed_gen:
+                    feedback = "[JSON 검증 실패] 아래 출력을 유효한 JSON 한 줄로만 다시 출력하세요.\n\n실패한 출력:\n" + (failed_gen[:2000] if len(failed_gen) > 2000 else failed_gen)
+                else:
+                    feedback = "[JSON 검증 실패] 이전 응답이 JSON 검증에 실패했습니다. response, emotion, tarot_numbers/tarot_cancel 형식만 한 줄 JSON으로 출력하세요."
+                try:
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=api_messages + [{"role": "user", "content": feedback}],
+                        max_tokens=max_tok,
+                        response_format={"type": "json_object"},
+                    )
+                    raw = (response.choices[0].message.content or "").strip()
+                except Exception as retry_e:
+                    logger.warning("타로 선택 피드백 재시도 실패: %s", retry_e)
+                    raw = None
+            else:
+                logger.warning("타로 선택 단계 Groq 실패: %s", e)
+                raw = None
+        if raw is None:
+            default_reask = out["response"]  # "1번부터 78번까지 번호 N개만 골라주세요."
+            try:
+                explain_prompt = (
+                    f"시청자가 \"{msg}\"라고 했습니다. 이건 1~78 범위의 자연수 {spread_count}개로 인식되지 않습니다. "
+                    f"왜 안 되는지 한 줄 설명한 뒤, 1~78 중 {spread_count}개만 골라달라고 재요청하는 문장을 한국어 존댓말로 한 문장만 출력하세요. JSON·마크다운 없이 그 문장만."
+                )
+                resp = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "system", "content": "한 문장만 출력하세요. JSON·설명 추가 없이."}, {"role": "user", "content": explain_prompt}],
+                    max_tokens=256,
+                )
+                fallback_text = (resp.choices[0].message.content or "").strip().strip("'\"")
+                # 사용자 말 그대로 돌려받거나 짧으면 기본 재요청 문구 사용
+                if fallback_text and len(fallback_text) > 20 and fallback_text.strip() != msg.strip():
+                    if msg.strip() not in fallback_text or len(fallback_text) > len(msg) + 15:
+                        out["response"] = fallback_text
+                if not (out["response"] or "").strip() or out["response"].strip() == msg.strip():
+                    out["response"] = default_reask
+            except Exception as fallback_e:
+                logger.warning("타로 선택 설명 문장 생성 실패: %s", fallback_e)
+            return out
+        try:
+            data = json.loads(raw)
+            out["response"] = (data.get("response") or out["response"]).strip() or out["response"]
+            tts_text = (data.get("tts_text") or "").strip()
+            if tts_text:
+                out["tts_text"] = tts_text
+            out["emotion"] = (data.get("emotion") or "neutral").strip()
+            if out["emotion"] not in VALID_EMOTIONS:
+                out["emotion"] = "neutral"
+            if data.get("tarot_cancel") is True:
+                out["tarot_cancel"] = True
+                return out
+            nums = data.get("tarot_numbers") or data.get("tarotNumbers")
+            if not isinstance(nums, list) and isinstance(nums, str):
+                nums = [x.strip() for x in nums.replace("，", ",").split(",") if x.strip()]
+            if isinstance(nums, list):
+                clean: List[int] = []
+                for x in nums:
+                    try:
+                        n = int(x) if not isinstance(x, int) else x
+                        if 1 <= n <= 78 and n not in clean:
+                            clean.append(n)
+                    except (TypeError, ValueError):
+                        continue
+                if pending:
+                    merged = list(pending)
+                    for n in clean:
+                        if n not in merged:
+                            merged.append(n)
+                        if len(merged) >= spread_count:
+                            break
+                    clean = merged[:spread_count]
+                else:
+                    clean = clean[:spread_count]
+                if len(clean) >= spread_count:
+                    out["tarot_numbers"] = clean[:spread_count]
+                    logger.info("타로 번호 인식: %s", out["tarot_numbers"])
+            if out["tarot_numbers"] is None and msg:
+                fallback_nums = self._parse_tarot_numbers_fallback(msg, spread_count)
+                if fallback_nums and len(fallback_nums) >= spread_count:
+                    final = list(fallback_nums[:spread_count])
+                    if pending:
+                        merged = list(pending)
+                        for n in fallback_nums:
+                            if n not in merged:
+                                merged.append(n)
+                            if len(merged) >= spread_count:
+                                break
+                        final = merged[:spread_count]
+                    out["tarot_numbers"] = final
+                    logger.info("타로 번호 폴백 인식: %s (원문: %s)", out["tarot_numbers"], msg[:50])
+            # AI가 JSON에 번호를 안 넣고 응답 문장에만 적은 경우(예: "선택하신 번호 1, 5, 13을 확인") → 응답에서 추출
+            if out["tarot_numbers"] is None and out.get("response"):
+                resp_text = out["response"]
+                if any(k in resp_text for k in ("확인", "선택", "고르", "번", "번호")):
+                    from_response = self._parse_tarot_numbers_fallback(resp_text, spread_count)
+                    if from_response and len(from_response) >= spread_count:
+                        out["tarot_numbers"] = from_response[:spread_count]
+                        logger.info("타로 번호 응답문에서 추출: %s", out["tarot_numbers"])
+            return out
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("타로 선택 JSON 파싱 실패: %s", e)
+            try:
+                explain_prompt = (
+                    f"시청자가 \"{msg}\"라고 했습니다. 이건 1~78 범위의 자연수 {spread_count}개로 인식되지 않습니다. "
+                    f"왜 안 되는지 한 줄 설명한 뒤, 1~78 중 {spread_count}개만 골라달라고 재요청하는 문장을 한국어 존댓말로 한 문장만 출력하세요. JSON·마크다운 없이 그 문장만."
+                )
+                resp = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "system", "content": "한 문장만 출력하세요. JSON·설명 추가 없이."}, {"role": "user", "content": explain_prompt}],
+                    max_tokens=256,
+                )
+                out["response"] = (resp.choices[0].message.content or out["response"]).strip() or out["response"]
+            except Exception:
+                pass
+            return out
+
+    def _korean_numbers_to_digits(self, text: str) -> str:
+        """한글 숫자 표현을 아라비아 숫자로 치환 (하나 다섯 십삼 → 1 5 13)."""
+        if not text or not text.strip():
+            return text
+        # 긴 패턴 먼저 치환 (십삼 before 십/삼)
+        table = [
+            ("십삼", " 13 "), ("십이", " 12 "), ("십일", " 11 "), ("십구", " 19 "), ("십팔", " 18 "),
+            ("십칠", " 17 "), ("십육", " 16 "), ("십오", " 15 "), ("십사", " 14 "),
+            ("열셋", " 13 "), ("열둘", " 12 "), ("열하나", " 11 "), ("열아홉", " 19 "), ("열여덟", " 18 "),
+            ("열일곱", " 17 "), ("열여섯", " 16 "), ("열다섯", " 15 "), ("열넷", " 14 "),
+            ("스무아홉", " 29 "), ("스무여덟", " 28 "), ("스무일곱", " 27 "), ("스무여섯", " 26 "),
+            ("스무다섯", " 25 "), ("스무넷", " 24 "), ("스무셋", " 23 "), ("스무둘", " 22 "), ("스무하나", " 21 "),
+            ("스물", " 20 "), ("스무", " 20 "), ("이십", " 20 "), ("삼십", " 30 "), ("사십", " 40 "),
+            ("오십", " 50 "), ("육십", " 60 "), ("칠십", " 70 "),
+            ("하나", " 1 "), ("둘", " 2 "), ("셋", " 3 "), ("넷", " 4 "), ("다섯", " 5 "),
+            ("여섯", " 6 "), ("일곱", " 7 "), ("여덟", " 8 "), ("아홉", " 9 "), ("열", " 10 "),
+            ("일", " 1 "), ("이", " 2 "), ("삼", " 3 "), ("사", " 4 "), ("오", " 5 "),
+            ("육", " 6 "), ("칠", " 7 "), ("팔", " 8 "), ("구", " 9 "), ("십", " 10 "),
+        ]
+        s = " " + (text or "") + " "
+        for k, v in table:
+            s = s.replace(k, v)
+        return s
+
+    def _parse_tarot_numbers_fallback(self, text: str, spread_count: int) -> Optional[List[int]]:
+        """숫자만 추출. 한글(하나/다섯/십삼 등)은 먼저 숫자로 치환. 123→[1,2,3], 1 2 3→[1,2,3]."""
+        import re
+        normalized = self._korean_numbers_to_digits(text or "")
+        out: List[int] = []
+        for m in re.findall(r"\d+", normalized):
+            n = int(m)
+            if 1 <= n <= 78 and n not in out:
+                out.append(n)
+                if len(out) >= spread_count:
+                    return out[:spread_count]
+        if len(out) < spread_count:
+            for m in re.findall(r"\d+", text or ""):
+                n = int(m)
+                if 1 <= n <= 78 and n not in out:
+                    out.append(n)
+                    if len(out) >= spread_count:
+                        return out[:spread_count]
+        if len(out) < spread_count:
+            for m in re.findall(r"\d+", text or ""):
+                if len(m) >= spread_count:
+                    for c in m:
+                        if len(out) >= spread_count:
+                            break
+                        x = int(c)
+                        if 1 <= x <= 9 and x not in out:
+                            out.append(x)
+                    if len(out) >= spread_count:
+                        return out[:spread_count]
+                    break
+        return out[:spread_count] if len(out) >= spread_count else None
+
+    def parse_tarot_card_numbers(
+        self,
+        user_message: str,
+        spread_count: int = 3,
+    ) -> Optional[List[int]]:
+        """사용자 멘트(123, 일 십삼 오십 등)에서 1~78 번호를 AI가 추출. 실패 시 단순 숫자 파싱 폴백."""
+        if not (user_message or "").strip():
+            return None
+        messages = [
+            {"role": "system", "content": self.TAROT_NUMBERS_SYSTEM},
+            {"role": "user", "content": f"사용자 말: {user_message.strip()}\n\n1~78 번호 {spread_count}개만 JSON으로."},
+        ]
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=128,
+                response_format={"type": "json_object"},
+            )
+            raw = (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "400" in err_msg and "json_validate_failed" in err_msg:
+                failed_gen = _extract_failed_generation(e)
+                if failed_gen:
+                    feedback = "[JSON 검증 실패] 아래 출력을 유효한 JSON 한 줄로만 다시 출력하세요.\n\n실패한 출력:\n" + (failed_gen[:1500] if len(failed_gen) > 1500 else failed_gen)
+                else:
+                    feedback = "[JSON 검증 실패] 이전 응답이 JSON 검증에 실패했습니다. {\"numbers\": [1,2,3]} 형식만 한 줄로 출력하세요."
+                try:
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=messages + [{"role": "user", "content": feedback}],
+                        max_tokens=128,
+                        response_format={"type": "json_object"},
+                    )
+                    raw = (response.choices[0].message.content or "").strip()
+                except Exception as retry_e:
+                    logger.warning("타로 번호 추출 피드백 재시도 실패: %s", retry_e)
+                    return self._parse_tarot_numbers_fallback(user_message, spread_count)
+            else:
+                logger.warning("타로 번호 추출 Groq 실패: %s", e)
+                return self._parse_tarot_numbers_fallback(user_message, spread_count)
+        try:
+            data = json.loads(raw)
+            nums = data.get("numbers")
+            if not isinstance(nums, list):
+                return self._parse_tarot_numbers_fallback(user_message, spread_count)
+            out = []
+            for x in nums[:spread_count]:
+                try:
+                    n = int(x) if not isinstance(x, int) else x
+                    if 1 <= n <= 78 and n not in out:
+                        out.append(n)
+                except (TypeError, ValueError):
+                    continue
+            if len(out) >= spread_count:
+                return out[:spread_count]
+            return self._parse_tarot_numbers_fallback(user_message, spread_count)
+        except (json.JSONDecodeError, TypeError):
+            return self._parse_tarot_numbers_fallback(user_message, spread_count)

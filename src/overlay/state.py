@@ -11,6 +11,8 @@ overlay_state: dict[str, Any] = {
     "assistant_messages": [],
     "_next_id": 0,
     "ignore_streamer_chat": False,  # True면 방장 채팅 무시: 오버레이 미표시, AI 미반응
+    "tarot": None,  # 타로 오버레이: None | { phase, requester_id, cards, interpretation, ... }
 }
 MAX_VIEWER_MESSAGES = 50
+TAROT_SELECT_TIMEOUT_SEC = 300  # 선택 대기 타임아웃 (기본 5분)
 MAX_ASSISTANT_MESSAGES = 50
