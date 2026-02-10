@@ -459,7 +459,7 @@ class GroqClient:
 반드시 JSON 한 줄만: {"numbers": [1, 13, 50]} (개수는 사용자 요청 N에 맞춤)"""
 
     TAROT_SELECTION_SYSTEM = """현재 타로 번호 선택 단계입니다. 시청자에게 1~78 중 N개를 골라달라고 요청한 상태에서 시청자가 말한 내용을 자연어로 이해하세요.
-**중요: 시청자가 1~78 번호를 제시했으면 반드시 tarot_numbers에 정수 배열을 넣어야 합니다. (예: "123"→[1,2,3], "하나 다섯 십삼"→[1,5,13], "1 5 13"→[1,5,13]) 생략하면 안 됨.**
+**중요: 시청자가 1~78 번호를 제시했으면 반드시 tarot_numbers에 정수 배열을 넣어야 합니다. 숫자·한글 모두 인식: "123"→[1,2,3], "하나 다섯 십삼"→[1,5,13], "열한번 스무번 일번"→[11,20,1], "일곱 여덟 아홉"→[7,8,9] 등. 생략 금지.**
 "이미 고른 번호"가 있으면 이번에 말한 번호와 합쳐서 총 N개가 되도록 tarot_numbers에 **전체 번호 배열**을 넣으세요.
 
 (1) 시청자가 1~78 범위의 **정수** 번호를 제시했으면 → **반드시** tarot_numbers에 [전체 N개] 넣고, response에는 그걸 확인하는 짧은 한 문장(존댓말). tts_text에는 같은 내용을 TTS 읽기용으로 숫자를 한글로(1→일, 13→십삼) 읽는 문장.
@@ -620,6 +620,7 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS 읽기용(숫
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("타로 선택 JSON 파싱 실패: %s", e)
+            default_reask = out["response"]
             try:
                 explain_prompt = (
                     f"시청자가 \"{msg}\"라고 했습니다. 이건 1~78 범위의 자연수 {spread_count}개로 인식되지 않습니다. "
@@ -630,7 +631,12 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS 읽기용(숫
                     messages=[{"role": "system", "content": "한 문장만 출력하세요. JSON·설명 추가 없이."}, {"role": "user", "content": explain_prompt}],
                     max_tokens=256,
                 )
-                out["response"] = (resp.choices[0].message.content or out["response"]).strip() or out["response"]
+                fallback_text = (resp.choices[0].message.content or "").strip().strip("'\"")
+                if fallback_text and len(fallback_text) > 20 and fallback_text.strip() != msg.strip():
+                    if msg.strip() not in fallback_text or len(fallback_text) > len(msg) + 15:
+                        out["response"] = fallback_text
+                if not (out["response"] or "").strip() or out["response"].strip() == msg.strip():
+                    out["response"] = default_reask
             except Exception:
                 pass
             return out
@@ -643,7 +649,7 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS 읽기용(숫
         table = [
             ("십삼", " 13 "), ("십이", " 12 "), ("십일", " 11 "), ("십구", " 19 "), ("십팔", " 18 "),
             ("십칠", " 17 "), ("십육", " 16 "), ("십오", " 15 "), ("십사", " 14 "),
-            ("열셋", " 13 "), ("열둘", " 12 "), ("열하나", " 11 "), ("열아홉", " 19 "), ("열여덟", " 18 "),
+            ("열셋", " 13 "), ("열둘", " 12 "), ("열하나", " 11 "), ("열한", " 11 "), ("열아홉", " 19 "), ("열여덟", " 18 "),
             ("열일곱", " 17 "), ("열여섯", " 16 "), ("열다섯", " 15 "), ("열넷", " 14 "),
             ("스무아홉", " 29 "), ("스무여덟", " 28 "), ("스무일곱", " 27 "), ("스무여섯", " 26 "),
             ("스무다섯", " 25 "), ("스무넷", " 24 "), ("스무셋", " 23 "), ("스무둘", " 22 "), ("스무하나", " 21 "),
