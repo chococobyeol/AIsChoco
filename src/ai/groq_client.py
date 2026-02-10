@@ -242,6 +242,36 @@ class GroqClient:
             logger.warning("요약 생성 실패: %s", e)
             return ""
 
+    TAROT_WAIT_SYSTEM = (
+        "지금 타로 결과 화면이 60초 동안 표시 중입니다. "
+        "시청자가 타로 또 봐줘, 봐줘 등 요청해도 창이 닫힐 때까지 기다려 달라고 한 문장으로 짧게 한국어로 답하세요. "
+        "반드시 JSON 한 줄만 출력: {\"response\": \"한 문장 답변\"}"
+    )
+
+    def generate_tarot_wait_reply(self, user_message: str) -> str:
+        """60초 대기 중 타로/봐줘 요청에 쓸 '창 닫힐 때까지 기다려 주세요' 멘트 생성."""
+        content = (user_message or "").strip()
+        if not content:
+            return "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
+        messages = [
+            {"role": "system", "content": self._system_prompt(self.TAROT_WAIT_SYSTEM)},
+            {"role": "user", "content": content},
+        ]
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=128,
+                response_format={"type": "json_object"},
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            data = json.loads(raw)
+            text = (data.get("response") or "").strip()
+            return text or "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
+        except Exception as e:
+            logger.warning("타로 대기 멘트 생성 실패: %s", e)
+            return "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
+
     def reply_batch(
         self,
         pending: List[Any],

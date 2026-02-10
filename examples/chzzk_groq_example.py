@@ -219,6 +219,36 @@ async def reply_worker(
                 if reset_at and time.time() >= reset_at:
                     overlay_state["tarot"] = None
                     continue
+                # 60초 대기 중 아무나 타로/봐줘 요청하면 "창 닫힐 때까지 기다려 주세요" 멘트만 (AI 처리)
+                did_wait_ment = False
+                for m in pending_msgs:
+                    msg = (getattr(m, "message", "") or "").strip()
+                    looks_tarot = "타로" in msg or "봐줘" in msg or "볼래" in msg
+                    looks_again = ("또" in msg or "다시" in msg) and ("봐" in msg or "볼" in msg or "해" in msg)
+                    if looks_tarot or looks_again:
+                        reply_text = await asyncio.to_thread(
+                            groq_client.generate_tarot_wait_reply, msg
+                        )
+                        if not reply_text:
+                            reply_text = "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
+                        try:
+                            path = await asyncio.to_thread(
+                                _tts_synthesize_only, tts_service, text_for_tts_numbers(reply_text), "neutral", "Korean"
+                            )
+                            is_speaking[0] = True
+                            await asyncio.to_thread(tts_service.play_file, path)
+                        except Exception:
+                            pass
+                        finally:
+                            is_speaking[0] = False
+                        kept = [(mm, oid) for mm, oid in zip(pending_msgs, pending_ids) if mm != m]
+                        pending_msgs = [x for x, _ in kept]
+                        pending_ids = [y for _, y in kept]
+                        logger.info("타로 60초 대기 중 요청 → 기다리라 멘트 TTS: %s", reply_text[:50])
+                        did_wait_ment = True
+                        break
+                if did_wait_ment:
+                    continue
             # ----- 타로 선택 단계: 타임아웃 체크
             if tarot and tarot.get("phase") == "selecting":
                 deadline = tarot.get("select_deadline_ts") or 0
