@@ -71,197 +71,274 @@ def clear_tarot():
     logger.info("Overlay API: tarot clear")
     return JSONResponse({"ok": True})
 
-
 OVERLAY_HTML = """<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>채팅 오버레이</title>
+  <title>Chat Overlay Final v3</title>
+  <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    ::-webkit-scrollbar { display: none; }
+    
     body {
-      font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
-      background: transparent;
-      color: #1e293b;
+      font-family: "Gowun Dodum", sans-serif;
+      background-color: transparent;
       height: 100vh;
-      padding: 10px 12px;
+      width: 100vw;
+      padding: 15px;
       display: flex;
-      gap: 2px;
-      align-items: stretch;
+      gap: 20px;
+      overflow: hidden;
     }
+
+    /* OBS 모드일 때 버튼 숨김 */
+    body.obs-mode .btn-area { display: none !important; }
+
+    /* [컬럼 설정] */
     .col {
       flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end; /* 아래에서 위로 쌓임 */
       min-width: 0;
-      max-width: 280px;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
+      padding-bottom: 5px;
     }
-    .col-content {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-    }
-    .col-content .inner { margin-top: auto; }
+
+    /* [메시지 공통 디자인] */
     .row {
-      padding: 8px 10px;
-      margin-bottom: 6px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.92);
-      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+      margin-bottom: 12px;
+      padding: 14px 18px;
+      border-radius: 16px;
+      font-size: 17px;
+      line-height: 1.5;
       word-break: break-word;
-      font-size: 13px;
-      line-height: 1.4;
-      border-left: 3px solid transparent;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.1);
+      
+      /* 등장 애니메이션 (부드럽게 스윽) */
+      opacity: 0;
+      transform: translateY(20px);
+      animation: slideUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+      transition: all 0.5s ease; /* 상태 변화 부드럽게 */
     }
-    .row.viewer {
-      margin-left: auto;
-      max-width: 92%;
-      text-align: right;
+
+    @keyframes slideUp {
+      to { opacity: 1; transform: translateY(0); }
     }
-    .row.viewer .name {
-      font-weight: 700;
-      color: #0f172a;
-      font-size: 12px;
-      margin-bottom: 3px;
-      text-shadow: none;
-    }
-    .row.viewer .text { color: #334155; }
-    .row.viewer.processed {
-      background: rgba(248, 250, 252, 0.88);
-      border-left-color: #94a3b8;
-      opacity: 0.88;
-    }
-    .row.viewer.processed .name { color: #64748b; font-weight: 600; }
-    .row.viewer.processed .text { color: #64748b; }
+
+    /* -----------------------------------------------------------
+       [왼쪽: AI/방송인] 
+       ----------------------------------------------------------- */
     .row.assistant {
-      max-width: 95%;
+      align-self: flex-start;
       text-align: left;
-      border-left-color: #64748b;
+      background: rgba(60, 55, 50, 0.9);
+      color: #fff8e1;
+      max-width: 95%;
+      border-left: 5px solid #e2b088;
     }
-    .row.assistant .text { color: #334155; }
+
+    /* [AI 이전 답변] - 흐리게 */
     .row.assistant.previous {
-      background: rgba(248, 250, 252, 0.88);
-      border-left-color: #94a3b8;
-      opacity: 0.82;
+      background: rgba(40, 35, 30, 0.6);
+      color: #d6d3d1;
+      border-left-color: #78716c;
+      transform: scale(0.98);
+      box-shadow: none;
     }
-    .row.assistant.previous .text { color: #64748b; }
-    .empty { opacity: 0.7; font-size: 12px; padding: 6px 0; color: #64748b; }
-    .btn-clear {
+
+    /* -----------------------------------------------------------
+       [오른쪽: 시청자]
+       ----------------------------------------------------------- */
+    .row.viewer {
+      align-self: flex-end;
+      text-align: right;
+      background: rgba(40, 45, 60, 0.9);
+      color: #f1f5f9;
+      max-width: 95%;
+      border-right: 5px solid #94a3b8;
+    }
+
+    .row.viewer .name {
+      display: block;
+      font-size: 13px;
+      font-weight: bold;
+      color: #bae6fd;
+      margin-bottom: 5px;
+    }
+
+    /* [답변 완료된 시청자 채팅] - 흐리게 */
+    .row.viewer.processed {
+      background: rgba(20, 25, 35, 0.65);
+      color: #94a3b8;
+      border-right-color: #475569;
+      transform: scale(0.98);
+      box-shadow: none;
+      filter: grayscale(0.8);
+    }
+
+    /* [버튼 영역] */
+    .btn-area {
       position: fixed;
-      bottom: 8px;
-      right: 8px;
-      padding: 4px 10px;
-      font-size: 12px;
-      border-radius: 6px;
-      border: 1px solid #94a3b8;
-      background: rgba(255,255,255,0.9);
-      color: #475569;
-      cursor: pointer;
+      top: 15px;
+      right: 15px;
+      display: flex;
+      gap: 8px;
+      z-index: 9999;
     }
-    .btn-clear:hover { background: #f1f5f9; }
-    .btn-streamer {
-      position: fixed;
-      bottom: 8px;
-      right: 72px;
-      padding: 4px 10px;
-      font-size: 12px;
-      border-radius: 6px;
-      border: 1px solid #94a3b8;
-      background: rgba(255,255,255,0.9);
-      color: #475569;
+
+    .btn-common {
+      padding: 8px 14px;
+      font-size: 13px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(0, 0, 0, 0.7);
+      color: #e2e8f0;
       cursor: pointer;
+      font-family: "Gowun Dodum", sans-serif;
     }
-    .btn-streamer:hover { background: #f1f5f9; }
-    .btn-streamer.on { background: #e2e8f0; font-weight: 600; }
+    .btn-common:hover { background: rgba(255,255,255,0.2); color: white; }
+    .btn-common.on { background: rgba(239, 68, 68, 0.6); border-color: #f87171; }
+
   </style>
 </head>
 <body>
-  <button type="button" class="btn-streamer" id="btn-streamer">방장 숨김: OFF</button>
-  <button type="button" class="btn-clear" id="btn-clear">클리어</button>
-  <div class="col">
-    <div class="col-content" id="assistant-col"></div>
+  <div class="btn-area">
+    <button type="button" class="btn-common" id="btn-streamer">방장 숨김</button>
+    <button type="button" class="btn-common" id="btn-clear">지우기</button>
   </div>
-  <div class="col">
-    <div class="col-content" id="viewer-col"></div>
-  </div>
+
+  <div class="col" id="col-assistant"></div>
+  <div class="col" id="col-viewer"></div>
+
   <script>
-    function escapeHtml(s) {
-      if (s == null || s === undefined) return "";
-      var div = document.createElement("div");
-      div.textContent = String(s);
-      return div.innerHTML;
+    // URL 파라미터 확인 (?obs=1)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('obs')) {
+      document.body.classList.add('obs-mode');
     }
-    var MAX_AGE = 600;
-    var FADE_START = 480;
-    function opacityForAge(ts) {
-      if (ts == null) return 1;
-      var age = (Date.now() / 1000) - ts;
-      if (age <= FADE_START) return 1;
-      if (age >= MAX_AGE) return 0;
-      return 1 - (age - FADE_START) / (MAX_AGE - FADE_START);
+
+    const MAX_AGE = 600; // 10분 (초 단위)
+
+    function escapeHtml(text) {
+      if (!text) return "";
+      return text.replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
     }
+
     function render() {
       var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
+      
       fetch(base + "/api/state")
         .then(function(r) { return r.json(); })
         .then(function(data) {
+          // 1. 버튼 상태 업데이트
           var ignore = data.ignore_streamer_chat || false;
           var btn = document.getElementById("btn-streamer");
-          if (btn) {
-            btn.textContent = ignore ? "방장 숨김: ON" : "방장 숨김: OFF";
-            btn.className = "btn-streamer" + (ignore ? " on" : "");
+          if(btn) {
+             btn.className = "btn-common" + (ignore ? " on" : "");
+             btn.innerText = ignore ? "방장 숨김: ON" : "방장 숨김: OFF";
           }
+
           var now = Date.now() / 1000;
-          var viewerList = (data.viewer_messages || []).filter(function(item) {
-            var age = now - (item.ts != null ? item.ts : now);
-            return age <= MAX_AGE;
+
+          // 2. 10분 지난 메시지 필터링 (빼먹었던 부분 복구!)
+          var viewerList = (data.viewer_messages || []).filter(function(m) {
+             return (now - (m.ts || now)) <= MAX_AGE;
           });
-          var assistantList = (data.assistant_messages || []).filter(function(item) {
-            var age = now - (item.ts != null ? item.ts : now);
-            return age <= MAX_AGE;
+          var assistantList = (data.assistant_messages || []).filter(function(m) {
+             return (now - (m.ts || now)) <= MAX_AGE;
           });
-          var vEl = document.getElementById("viewer-col");
-          var aEl = document.getElementById("assistant-col");
-          vEl.innerHTML = viewerList.length === 0
-            ? '<div class="empty">(대기 중)</div>'
-            : '<div class="inner">' + viewerList.map(function(item) {
-                var cls = "row viewer" + (item.processed ? " processed" : "");
-                var user = escapeHtml(item.user || "?");
-                var msg = escapeHtml(item.message || "");
-                var op = opacityForAge(item.ts);
-                return '<div class="' + cls + '" style="opacity:' + op + '"><div class="name">' + user + '</div><div class="text">' + msg + '</div></div>';
-              }).join("") + '</div>';
-          aEl.innerHTML = assistantList.length === 0
-            ? '<div class="empty">(대기 중)</div>'
-            : '<div class="inner">' + assistantList.map(function(item, i) {
-                var msg = escapeHtml(item.message || "");
-                var prev = i < assistantList.length - 1 ? " previous" : "";
-                var op = opacityForAge(item.ts);
-                return '<div class="row assistant' + prev + '" style="opacity:' + op + '"><div class="text">' + msg + '</div></div>';
-              }).join("") + '</div>';
-          vEl.scrollTop = vEl.scrollHeight;
-          aEl.scrollTop = aEl.scrollHeight;
+
+          // 3. 스마트 업데이트 (깜빡임 해결의 핵심)
+          updateColumn("col-viewer", viewerList, "viewer");
+          updateColumn("col-assistant", assistantList, "assistant");
+
         })
-        .catch(function() {
-          document.getElementById("viewer-col").innerHTML = '<div class="empty">(연결 오류)</div>';
-          document.getElementById("assistant-col").innerHTML = '';
-        });
+        .catch(function(err) { console.error(err); });
     }
+
+    // 컬럼 업데이트 함수 (기존 내용을 덮어쓰지 않고 비교해서 수정함)
+    function updateColumn(colId, messages, type) {
+      var col = document.getElementById(colId);
+      var validIds = new Set();
+
+      messages.forEach(function(msg, index) {
+        // 메시지 고유 ID 생성 (타임스탬프 활용)
+        var msgId = type + "-" + (msg.ts || 0) + "-" + index; 
+        validIds.add(msgId);
+
+        var el = document.getElementById(msgId);
+
+        // A. 새로운 메시지면? -> 만든다 (append)
+        if (!el) {
+          el = document.createElement("div");
+          el.id = msgId;
+          el.className = "row " + type;
+          
+          var html = "";
+          if (type === "viewer") {
+             html += '<span class="name">' + escapeHtml(msg.user) + '</span>';
+          }
+          html += '<div class="text">' + escapeHtml(msg.message) + '</div>';
+          
+          el.innerHTML = html;
+          col.appendChild(el); // 톡! 추가 (전체 갱신 X)
+          
+          // 새 메시지 왔으니 스크롤 내리기
+          // col.scrollTop = col.scrollHeight; 
+        }
+
+        // B. 상태 업데이트 (답변 완료 / 이전 답변 처리)
+        // 시청자: processed 체크
+        if (type === "viewer") {
+           if (msg.processed && !el.classList.contains("processed")) {
+              el.classList.add("processed");
+           }
+        }
+        // AI: 마지막 답변이 아니면 previous 처리
+        if (type === "assistant") {
+           var isLast = (index === messages.length - 1);
+           if (!isLast && !el.classList.contains("previous")) {
+              el.classList.add("previous");
+           } else if (isLast && el.classList.contains("previous")) {
+              el.classList.remove("previous"); // 혹시 순서 꼬임 방지
+           }
+        }
+      });
+
+      // C. 삭제된 메시지 정리 (10분 지난거 지우기)
+      // 현재 화면에는 있는데, API 리스트(validIds)에는 없는 애들을 찾아서 제거
+      var children = Array.from(col.children);
+      children.forEach(function(child) {
+        if (!validIds.has(child.id)) {
+           child.style.opacity = "0"; // 부드럽게 사라지기
+           setTimeout(function() { 
+             if(child.parentNode) child.parentNode.removeChild(child); 
+           }, 500); 
+        }
+      });
+    }
+
     document.getElementById("btn-clear").onclick = function() {
-      var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
-      fetch(base + "/api/clear", { method: "POST" }).then(function() { render(); });
+      fetch("/api/clear", { method: "POST" }).then(function() { 
+        document.getElementById("col-viewer").innerHTML = "";
+        document.getElementById("col-assistant").innerHTML = "";
+        render(); 
+      });
     };
     document.getElementById("btn-streamer").onclick = function() {
-      var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
-      fetch(base + "/api/toggle_streamer_chat", { method: "POST" }).then(function() { render(); });
+      fetch("/api/toggle_streamer_chat", { method: "POST" }).then(render);
     };
-    render();
+
     setInterval(render, 500);
+    render();
   </script>
 </body>
 </html>
