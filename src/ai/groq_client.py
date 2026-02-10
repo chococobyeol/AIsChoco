@@ -7,6 +7,7 @@ PRD 4.5.2 요청/출력 형식 준수.
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, List, Optional
@@ -16,6 +17,20 @@ from openai import OpenAI
 from .models import AIResponse, VALID_EMOTIONS
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_numbers_1_78(text: str) -> List[int]:
+    """메시지에서 1~78 숫자만 순서대로 추출 (검증/피드백용)."""
+    if not (text or "").strip():
+        return []
+    seen = set()
+    out: List[int] = []
+    for m in re.findall(r"\d+", text):
+        n = int(m)
+        if 1 <= n <= 78 and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
 
 
 def _extract_failed_generation(err: Exception) -> str:
@@ -79,24 +94,26 @@ SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. �
 
 TAROT_INTERPRET_SYSTEM = """당신은 타로 해석가입니다. 질문과 카드에 맞춰 해석과 시각화 데이터를 JSON으로 출력하세요.
 
-visual_data 작성 규칙:
-1. **Yes/No 질문** (예: 비 올까? 합격할까? 재회할까?):
+visual_data 작성 규칙 (반드시 지킬 것):
+- scores는 **항상 JSON 배열**이며, **labels 개수와 동일한 개수**의 숫자(0~100)를 넣으세요. 한 개의 숫자로 합치지 말 것.
+1. **Yes/No 질문** (예: 비 올까? 합격할까?):
    - "visual_type": "yes_no"
    - "recommendation": "YES" 또는 "NO" (또는 "SEMI-YES")
-   - "score": 긍정 확률 (0~100)
+   - "score": 긍정 확률 (0~100, 숫자 하나)
 
 2. **양자택일/비교** (예: A가 좋을까 B가 좋을까?):
    - "visual_type": "bar"
    - "labels": ["A 선택", "B 선택"]
-   - "scores": [A점수, B점수]
+   - "scores": [70, 30]  ← 배열, 항목별 점수
 
-3. **종합 운세/일반** (오늘의 운세, 연애운 등):
+3. **종합 운세/일반** (오늘의 운세, 내일 뭐할지 등):
    - "visual_type": "radar"
    - "labels": ["금전", "애정", "건강", "학업/일", "대인관계"] (상황에 맞게 변형 가능)
-   - "scores": [점수1, 점수2, 점수3, 점수4, 점수5]
+   - "scores": [80, 70, 60, 90, 75]  ← labels와 **같은 개수**의 숫자 배열, 각 0~100
 
 출력 예시(JSON 한 줄):
-{"interpretation": "해석내용...", "tts_text": "읽을내용...", "visual_data": {"visual_type": "yes_no", "recommendation": "YES", "score": 85}, "soul_color": "#FFD700", "danger_alert": false}"""
+yes_no: {"interpretation": "...", "tts_text": "...", "visual_data": {"visual_type": "yes_no", "recommendation": "YES", "score": 85}, "soul_color": "#FFD700", "danger_alert": false}
+radar: {"interpretation": "...", "tts_text": "...", "visual_data": {"visual_type": "radar", "labels": ["금전","애정","건강","학업","대인"], "scores": [80,70,60,90,75]}, "soul_color": "#FFD700", "danger_alert": false}"""
 
 
 class GroqClient:
@@ -397,9 +414,25 @@ class GroqClient:
             data = json.loads(raw)
 
             v = data.get("visual_data") or {}
+            logger.info("타로 해석 raw visual_data: %s", v)
 
             # [검증 로직 강화] 데이터가 깨졌거나 조건에 안 맞으면 과감하게 None 처리
             valid_visual = None
+            labels = v.get("labels") or []
+            scores = v.get("scores")
+
+            # 모델이 scores를 한 개 정수로 이어붙여 보낸 경우 복구 시도 (예: [4080603070] → [40,80,60,30,70])
+            if labels and isinstance(scores, list) and len(scores) == 1 and isinstance(scores[0], int):
+                one = scores[0]
+                s = str(one)
+                n = len(labels)
+                if n >= 2 and len(s) == n * 2 and s.isdigit():
+                    try:
+                        scores = [min(100, int(s[i * 2 : (i + 1) * 2])) for i in range(n)]
+                    except (ValueError, IndexError):
+                        pass
+                if isinstance(scores, list) and len(scores) == n:
+                    v = {**v, "scores": scores}
 
             # 1. Yes/No 검증
             if v.get("visual_type") == "yes_no" and v.get("recommendation"):
@@ -408,6 +441,12 @@ class GroqClient:
             elif v.get("labels") and v.get("scores") and isinstance(v["scores"], list):
                 if len(v["labels"]) == len(v["scores"]) and len(v["scores"]) > 1:
                     valid_visual = v
+
+            if valid_visual is None and v:
+                reason = "yes_no인데 recommendation 없음" if v.get("visual_type") == "yes_no" else \
+                    "labels/scores 없거나 scores 비리스트" if not (v.get("labels") and isinstance(v.get("scores"), list)) else \
+                    "labels/scores 개수 불일치 또는 1개뿐"
+                logger.info("타로 visual_data 검증 탈락: %s (수신: %s)", reason, v)
 
             return {
                 "interpretation": data.get("interpretation") or "해석을 불러오는 중입니다.",
@@ -460,6 +499,9 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
             "tarot_cancel": False,
         }
         msg = (user_message or "").strip()
+        # 시청자 말에 1~78 번호가 중복으로 들어갔는지 검사 (순서 유지해서 중복만 판별)
+        _all = [int(m) for m in re.findall(r"\d+", msg) if m.isdigit() and 1 <= int(m) <= 78]
+        user_has_duplicate = len(_all) != len(set(_all))
         pending = [int(x) for x in (pending_numbers or []) if isinstance(x, (int, float)) and 1 <= int(x) <= 78]
         pending = list(dict.fromkeys(pending))[:spread_count]
         if pending:
@@ -543,6 +585,7 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
             nums = data.get("tarot_numbers") or data.get("tarotNumbers")
             if not isinstance(nums, list) and isinstance(nums, str):
                 nums = [x.strip() for x in nums.replace("，", ",").split(",") if x.strip()]
+            has_duplicate = False
             if isinstance(nums, list):
                 clean: List[int] = []
                 for x in nums:
@@ -550,8 +593,11 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                         if isinstance(x, float) and x != int(x):
                             continue
                         n = int(x) if not isinstance(x, int) else x
-                        if 1 <= n <= 78 and n not in clean:
-                            clean.append(n)
+                        if 1 <= n <= 78:
+                            if n not in clean:
+                                clean.append(n)
+                            else:
+                                has_duplicate = True
                     except (TypeError, ValueError):
                         continue
                 if pending:
@@ -564,11 +610,16 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                     clean = merged[:spread_count]
                 else:
                     clean = clean[:spread_count]
-                if len(clean) >= spread_count:
+                if has_duplicate:
+                    out["tarot_numbers"] = None
+                    out["response"] = f"중복된 번호가 있어요. 처음부터 다시 {spread_count}개 골라주세요."
+                    out["tts_text"] = out["response"]
+                    logger.info("타로 번호 중복 감지 → 처음부터 재선택 요청")
+                elif len(clean) >= spread_count:
                     out["tarot_numbers"] = clean[:spread_count]
                     logger.info("타로 번호 인식: %s", out["tarot_numbers"])
             # AI가 JSON에 tarot_numbers를 안 넣은 경우 → 응답 문장에서 번호 추출 (전체 또는 부분)
-            if out["tarot_numbers"] is None and out.get("response"):
+            if out["tarot_numbers"] is None and out.get("response") and not has_duplicate:
                 resp = out["response"]
                 from_resp = self._parse_tarot_numbers_fallback(resp, spread_count, return_partial=True)
                 if from_resp:
@@ -579,6 +630,78 @@ JSON 한 줄만: {"response": "표시용 문장", "tts_text": "TTS로 읽었을 
                         # 부분만 인식(예: 77, 65) → pending_numbers로 저장되도록
                         out["tarot_numbers"] = from_resp
                         logger.info("타로 번호 AI 응답문에서 부분 추출(누적용): %s", out["tarot_numbers"])
+
+            # 시청자 말에 중복 번호가 있으면 무조건 처음부터 다시 뽑으라고 함 (JSON/fallback 경로 상관없이)
+            if user_has_duplicate:
+                out["tarot_numbers"] = None
+                out["response"] = f"중복된 번호가 있어요. 처음부터 다시 {spread_count}개 골라주세요."
+                out["tts_text"] = out["response"]
+                logger.info("타로 번호 시청자 말 중복 감지 → 처음부터 재선택 요청")
+
+            # 시청자 말에서 추출한 번호와 AI 해석이 다르면 피드백으로 한 번 재시도 (중복 안내한 경우는 제외)
+            parsed_from_msg = _parse_numbers_1_78(msg)
+            ai_nums = out.get("tarot_numbers")
+            ai_nums = list(ai_nums)[:spread_count] if isinstance(ai_nums, list) else []
+            if not has_duplicate and not user_has_duplicate and parsed_from_msg and set(ai_nums) != set(parsed_from_msg):
+                feedback = (
+                    f"[번호 해석 오류] 시청자 말: \"{msg}\". 위에서 추출한 번호가 시청자가 말한 숫자와 다릅니다. "
+                    f"시청자가 말한 숫자 중 1~78만 순서대로 사용하세요. (예: 50 46 88 → 50, 46만 유효, 88은 78 초과 제외. "
+                    f"{spread_count}개 필요하면 부족분만큼 더 골라달라고 재요청.) 동일한 JSON 형식으로 다시 출력하세요."
+                )
+                retry_messages = api_messages + [
+                    {"role": "assistant", "content": raw},
+                    {"role": "user", "content": feedback},
+                ]
+                try:
+                    response2 = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=retry_messages,
+                        max_tokens=max_tok,
+                        response_format={"type": "json_object"},
+                    )
+                    raw2 = (response2.choices[0].message.content or "").strip()
+                    data2 = json.loads(raw2)
+                    out["response"] = (data2.get("response") or out["response"]).strip() or out["response"]
+                    if (data2.get("tts_text") or "").strip():
+                        out["tts_text"] = (data2.get("tts_text") or "").strip()
+                    out["emotion"] = (data2.get("emotion") or "neutral").strip()
+                    if out["emotion"] not in VALID_EMOTIONS:
+                        out["emotion"] = "neutral"
+                    if data2.get("tarot_cancel") is True:
+                        out["tarot_cancel"] = True
+                        return out
+                    nums2 = data2.get("tarot_numbers") or data2.get("tarotNumbers")
+                    if isinstance(nums2, list):
+                        clean2: List[int] = []
+                        for x in nums2:
+                            try:
+                                if isinstance(x, float) and x != int(x):
+                                    continue
+                                n = int(x) if not isinstance(x, int) else x
+                                if 1 <= n <= 78 and n not in clean2:
+                                    clean2.append(n)
+                            except (TypeError, ValueError):
+                                continue
+                        if pending:
+                            merged2 = list(pending)
+                            for n in clean2:
+                                if n not in merged2:
+                                    merged2.append(n)
+                                if len(merged2) >= spread_count:
+                                    break
+                            clean2 = merged2[:spread_count]
+                        else:
+                            clean2 = clean2[:spread_count]
+                        if len(clean2) >= spread_count:
+                            out["tarot_numbers"] = clean2[:spread_count]
+                            logger.info("타로 번호 피드백 재시도 후: %s", out["tarot_numbers"])
+                    if out.get("tarot_numbers") is None and out.get("response"):
+                        from_resp2 = self._parse_tarot_numbers_fallback(out["response"], spread_count, return_partial=True)
+                        if from_resp2:
+                            out["tarot_numbers"] = from_resp2[:spread_count] if len(from_resp2) >= spread_count else from_resp2
+                            logger.info("타로 번호 피드백 재시도 응답문에서 추출: %s", out["tarot_numbers"])
+                except Exception as retry_e:
+                    logger.warning("타로 선택 피드백 재시도 실패: %s", retry_e)
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("타로 선택 JSON 파싱 실패: %s", e)

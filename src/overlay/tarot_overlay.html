@@ -81,9 +81,8 @@
     }
 
     .text-col {
-      /* 기본 flex: 2지만, 그래프 없으면 JS로 flex: 1 (전체)로 변경됨 */
-      flex: 2; color: #f1f5f9; white-space: pre-wrap; 
-      overflow: hidden; font-size: 19px; line-height: 1.5;
+      flex: 2; color: #f1f5f9; white-space: pre-wrap;
+      overflow: hidden; min-height: 0; font-size: 19px; line-height: 1.5;
     }
 
     .graph-col {
@@ -101,7 +100,14 @@
     .yesno-box { text-align: center; width: 100%; }
     .yesno-big { font-size: 50px; font-weight: bold; margin-bottom: 10px; text-shadow: 0 2px 10px rgba(0,0,0,0.5); }
     .yesno-sub { font-size: 20px; color: #cbd5e1; }
-    
+
+    .radar-wrap { width: 100%; max-width: 260px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; overflow: visible; }
+    .radar-wrap svg { width: 100%; height: 100%; overflow: visible; }
+    .radar-polygon { fill: rgba(139, 92, 246, 0.35); stroke: #a78bfa; stroke-width: 2; transition: opacity 0.5s; }
+    .radar-axis { stroke: rgba(255,255,255,0.25); stroke-width: 1; }
+    .radar-grid { stroke: rgba(255,255,255,0.12); stroke-width: 1; fill: none; }
+    .radar-label { fill: #e2e8f0; font-size: 12px; text-anchor: middle; dominant-baseline: middle; font-family: 'Pretendard', sans-serif; }
+
     .fail-msg { position: absolute; top: 50%; width: 100%; text-align: center; font-size: 28px; color: #f87171; }
   </style>
 </head>
@@ -206,15 +212,22 @@
         textEl.style.flex = "1"; // 전체 너비 사용
       }
 
-      // 글자 크기 자동 조절
-      const textLen = (t.interpretation || "").length;
-      if (textLen > 400) textEl.style.fontSize = "16px";
-      else if (textLen > 300) textEl.style.fontSize = "17px";
-
       // 그래프 그리기 (있을 때만)
       if (hasGraph) {
         drawGraph(t.visual_data);
       }
+
+      // 긴 해석문: 글자 크기를 줄여서 영역 안에 전부 표시 (스크롤 없음)
+      setTimeout(function() {
+        var te = document.getElementById('text-col');
+        if (!te) return;
+        var fs = parseInt(te.style.fontSize, 10) || 19;
+        var minFs = 11;
+        while (te.scrollHeight > te.clientHeight && fs > minFs) {
+          fs -= 1;
+          te.style.fontSize = fs + 'px';
+        }
+      }, 80);
 
       // 애니메이션
       const tl = gsap.timeline();
@@ -247,7 +260,7 @@
 
   function drawGraph(v) {
     const el = document.getElementById('graph');
-    if (!el) return; // 요소가 없으면(데이터가 없어서 안 그렸으면) 리턴
+    if (!el) return;
 
     if (v.visual_type === 'yes_no') {
       const isYes = (v.recommendation === 'YES');
@@ -257,6 +270,42 @@
           <div class="yesno-big" style="color:${color}">${v.recommendation}</div>
           <div class="yesno-sub">확률: ${v.score || 0}%</div>
         </div>`;
+    }
+    else if (v.visual_type === 'radar' && v.labels && v.scores) {
+      const n = Math.min(v.labels.length, v.scores.length, 8);
+      const padding = 38;
+      const cx = 100 + padding, cy = 100 + padding, maxR = 82;
+      const points = [];
+      const labelPoints = [];
+      for (let i = 0; i < n; i++) {
+        const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+        const r = ((v.scores[i] || 0) / 100) * maxR;
+        points.push((cx + r * Math.cos(angle)).toFixed(2) + ',' + (cy + r * Math.sin(angle)).toFixed(2));
+        labelPoints.push({ x: cx + (maxR + 12) * Math.cos(angle), y: cy + (maxR + 12) * Math.sin(angle), text: v.labels[i] });
+      }
+      let grid = '';
+      for (let g = 1; g <= 4; g++) {
+        const gr = (maxR * g / 4).toFixed(2);
+        const circlePoints = [];
+        for (let i = 0; i <= n; i++) {
+          const a = (i / n) * 2 * Math.PI - Math.PI / 2;
+          circlePoints.push((cx + parseFloat(gr) * Math.cos(a)).toFixed(2) + ',' + (cy + parseFloat(gr) * Math.sin(a)).toFixed(2));
+        }
+        grid += '<polyline class="radar-grid" points="' + circlePoints.join(' ') + '"/>';
+      }
+      let axes = '';
+      for (let i = 0; i < n; i++) {
+        const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+        const ex = (cx + maxR * Math.cos(angle)).toFixed(2);
+        const ey = (cy + maxR * Math.sin(angle)).toFixed(2);
+        axes += '<line class="radar-axis" x1="' + cx + '" y1="' + cy + '" x2="' + ex + '" y2="' + ey + '"/>';
+      }
+      let labels = '';
+      labelPoints.forEach(function(p) {
+        labels += '<text class="radar-label" x="' + p.x.toFixed(2) + '" y="' + p.y.toFixed(2) + '">' + (p.text || '').replace(/</g, '&lt;') + '</text>';
+      });
+      const size = 200 + padding * 2;
+      el.innerHTML = '<div class="radar-wrap"><svg viewBox="0 0 ' + size + ' ' + size + '" xmlns="http://www.w3.org/2000/svg">' + grid + axes + '<polygon class="radar-polygon" points="' + points.join(' ') + '"/>' + labels + '</svg></div>';
     }
     else if (v.labels && v.scores) {
       let html = '<div class="bar-chart">';

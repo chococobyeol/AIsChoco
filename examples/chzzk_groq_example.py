@@ -274,8 +274,29 @@ async def reply_worker(
                         finally:
                             is_speaking[0] = False
                         continue
-                    numbers = selection.get("tarot_numbers")
+                    # AI 해석 우선. 1~78만 걸러서 사용.
+                    raw_numbers = selection.get("tarot_numbers") or []
+                    numbers = [int(x) for x in raw_numbers if isinstance(x, (int, float)) and 1 <= int(x) <= 78]
+                    numbers = numbers[:spread_count] if numbers else None
                     logger.info("타로 선택 결과: numbers=%s, spread_count=%s", numbers, spread_count)
+                    # 중복 안내 시 누적 번호 비우고 처음부터 다시 뽑게 함
+                    if numbers is None and "중복" in (selection.get("response") or ""):
+                        overlay_state["tarot"] = {**tarot, "pending_numbers": []}
+                        try:
+                            path = await asyncio.to_thread(
+                                _tts_synthesize_only,
+                                tts_service,
+                                text_for_tts_numbers(selection.get("tts_text") or selection["response"]),
+                                selection.get("emotion") or "neutral",
+                                "Korean",
+                            )
+                            is_speaking[0] = True
+                            await asyncio.to_thread(tts_service.play_file, path)
+                        except Exception:
+                            pass
+                        finally:
+                            is_speaking[0] = False
+                        continue
                     if numbers and 0 < len(numbers) < spread_count:
                         overlay_state["tarot"] = {**tarot, "pending_numbers": numbers}
                         try:
