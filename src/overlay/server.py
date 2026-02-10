@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,8 +20,10 @@ _TAROT_ASSETS = _PROJECT_ROOT / "assets" / "tarot"
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="AIsChoco Overlay", docs_url=None, redoc_url=None)
+
 if _TAROT_ASSETS.is_dir():
     app.mount("/tarot-assets", StaticFiles(directory=str(_TAROT_ASSETS)), name="tarot_assets")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,7 +34,6 @@ app.add_middleware(
 
 @app.get("/api/state")
 def get_state():
-    """오버레이: 시청자 채팅 컬럼 / AI 답변 컬럼, 방장채팅 숨김 설정, 타로 상태 반환."""
     viewer = list(overlay_state.get("viewer_messages") or [])
     assistant = list(overlay_state.get("assistant_messages") or [])
     ignore = bool(overlay_state.get("ignore_streamer_chat"))
@@ -47,36 +48,34 @@ def get_state():
 
 @app.post("/api/toggle_streamer_chat")
 def toggle_streamer_chat():
-    """방장 채팅 무시 토글. ON이면 방장 채팅 미표시·AI 미반응."""
     cur = bool(overlay_state.get("ignore_streamer_chat"))
     overlay_state["ignore_streamer_chat"] = not cur
-    logger.info("Overlay API: ignore_streamer_chat=%s", overlay_state["ignore_streamer_chat"])
     return JSONResponse({"ignore_streamer_chat": overlay_state["ignore_streamer_chat"]})
 
 
 @app.post("/api/clear")
 def clear_chat():
-    """채팅/답변 오버레이 수동 클리어."""
     overlay_state["viewer_messages"] = []
     overlay_state["assistant_messages"] = []
     overlay_state["_next_id"] = 0
-    logger.info("Overlay API: clear")
     return JSONResponse({"ok": True})
 
 
 @app.post("/api/tarot/clear")
 def clear_tarot():
-    """타로 오버레이 상태 초기화."""
     overlay_state["tarot"] = None
-    logger.info("Overlay API: tarot clear")
     return JSONResponse({"ok": True})
 
+
+# ==============================================================================
+# 채팅 오버레이 HTML (최종 수정: 분위기 맞춤형)
+# ==============================================================================
 OVERLAY_HTML = """<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Chat Overlay Final v3</title>
+  <title>Chat Overlay Soft</title>
   <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -89,40 +88,39 @@ OVERLAY_HTML = """<!DOCTYPE html>
       width: 100vw;
       padding: 15px;
       display: flex;
-      gap: 20px;
+      gap: 24px; /* 좌우 간격 조금 더 넓게 */
       overflow: hidden;
     }
 
-    /* OBS 모드일 때 버튼 숨김 */
     body.obs-mode .btn-area { display: none !important; }
 
-    /* [컬럼 설정] */
     .col {
       flex: 1;
       display: flex;
       flex-direction: column;
-      justify-content: flex-end; /* 아래에서 위로 쌓임 */
+      justify-content: flex-end;
       min-width: 0;
-      padding-bottom: 5px;
+      padding-bottom: 10px;
     }
 
     /* [메시지 공통 디자인] */
     .row {
-      margin-bottom: 12px;
-      padding: 14px 18px;
-      border-radius: 16px;
+      margin-bottom: 14px;
+      padding: 12px 16px;
+      border-radius: 12px;
       font-size: 17px;
       line-height: 1.5;
       word-break: break-word;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.25);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(255,255,255,0.1);
       
-      /* 등장 애니메이션 (부드럽게 스윽) */
+      /* 기본 상태: 은은한 그림자 */
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      backdrop-filter: blur(5px);
+      
+      /* 애니메이션 및 트랜지션 */
       opacity: 0;
       transform: translateY(20px);
       animation: slideUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-      transition: all 0.5s ease; /* 상태 변화 부드럽게 */
+      transition: all 0.5s ease;
     }
 
     @keyframes slideUp {
@@ -130,36 +128,44 @@ OVERLAY_HTML = """<!DOCTYPE html>
     }
 
     /* -----------------------------------------------------------
-       [왼쪽: AI/방송인] 
+       [왼쪽: AI] - 웜톤 (방 안 조명 느낌)
        ----------------------------------------------------------- */
     .row.assistant {
       align-self: flex-start;
       text-align: left;
-      background: rgba(60, 55, 50, 0.9);
-      color: #fff8e1;
-      max-width: 95%;
-      border-left: 5px solid #e2b088;
+      /* 배경: 짙은 웜그레이 */
+      background: rgba(60, 55, 50, 0.85);
+      color: #fff8e1; /* 상아색 폰트 */
+      max-width: 90%;
+      
+      /* [Active 효과] 은은한 주황색 발광 (테두리 아님) */
+      box-shadow: 0 0 15px rgba(251, 191, 36, 0.2), 0 4px 6px rgba(0,0,0,0.2);
+      border-left: 4px solid rgba(251, 191, 36, 0.8);
     }
 
-    /* [AI 이전 답변] - 흐리게 */
+    /* [AI 이전 답변] - 빛이 꺼진 느낌 */
     .row.assistant.previous {
-      background: rgba(40, 35, 30, 0.6);
-      color: #d6d3d1;
-      border-left-color: #78716c;
+      background: rgba(45, 40, 35, 0.6); /* 더 투명하게 */
+      color: #d1d5db; /* 약간 회색조 */
+      box-shadow: none; /* 발광 제거 */
+      border-left-color: rgba(255,255,255,0.2); /* 포인트 색상 죽임 */
       transform: scale(0.98);
-      box-shadow: none;
     }
 
     /* -----------------------------------------------------------
-       [오른쪽: 시청자]
+       [오른쪽: 시청자] - 쿨톤 (창밖 밤하늘 느낌)
        ----------------------------------------------------------- */
     .row.viewer {
       align-self: flex-end;
       text-align: right;
-      background: rgba(40, 45, 60, 0.9);
+      /* 배경: 짙은 네이비 */
+      background: rgba(30, 41, 59, 0.85);
       color: #f1f5f9;
-      max-width: 95%;
-      border-right: 5px solid #94a3b8;
+      max-width: 90%;
+
+      /* [Active 효과] 은은한 하늘색 발광 */
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.2), 0 4px 6px rgba(0,0,0,0.2);
+      border-right: 4px solid rgba(56, 189, 248, 0.8);
     }
 
     .row.viewer .name {
@@ -170,17 +176,25 @@ OVERLAY_HTML = """<!DOCTYPE html>
       margin-bottom: 5px;
     }
 
-    /* [답변 완료된 시청자 채팅] - 흐리게 */
+    /* [답변 완료된 시청자] - 빛이 꺼지고 뒤로 물러난 느낌 */
     .row.viewer.processed {
-      background: rgba(20, 25, 35, 0.65);
-      color: #94a3b8;
-      border-right-color: #475569;
-      transform: scale(0.98);
-      box-shadow: none;
-      filter: grayscale(0.8);
+      background: rgba(15, 23, 42, 0.5); /* 투명도 높여서 배경에 묻히게 */
+      color: #94a3b8; /* 글자색 회색으로 */
+      box-shadow: none; /* 발광 제거 */
+      border-right-color: rgba(255,255,255,0.1); /* 포인트 색상 죽임 */
+      transform: scale(0.98); /* 살짝 작아짐 */
+      filter: grayscale(0.5); /* 채도 뺌 */
     }
 
-    /* [버튼 영역] */
+    /* [사라질 때] */
+    .row.removing {
+      opacity: 0 !important;
+      transform: translateY(-10px) scale(0.9) !important;
+      margin-bottom: -30px !important;
+      pointer-events: none;
+    }
+
+    /* [버튼] */
     .btn-area {
       position: fixed;
       top: 15px;
@@ -194,14 +208,14 @@ OVERLAY_HTML = """<!DOCTYPE html>
       padding: 8px 14px;
       font-size: 13px;
       border-radius: 8px;
-      border: 1px solid rgba(255,255,255,0.3);
-      background: rgba(0, 0, 0, 0.7);
-      color: #e2e8f0;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(0, 0, 0, 0.6);
+      color: #cbd5e1;
       cursor: pointer;
       font-family: "Gowun Dodum", sans-serif;
     }
     .btn-common:hover { background: rgba(255,255,255,0.2); color: white; }
-    .btn-common.on { background: rgba(239, 68, 68, 0.6); border-color: #f87171; }
+    .btn-common.on { background: rgba(220, 38, 38, 0.5); border-color: #ef4444; }
 
   </style>
 </head>
@@ -215,21 +229,16 @@ OVERLAY_HTML = """<!DOCTYPE html>
   <div class="col" id="col-viewer"></div>
 
   <script>
-    // URL 파라미터 확인 (?obs=1)
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has('obs')) {
       document.body.classList.add('obs-mode');
     }
 
-    const MAX_AGE = 600; // 10분 (초 단위)
+    const MAX_AGE = 600; // 10분
 
     function escapeHtml(text) {
       if (!text) return "";
-      return text.replace(/&/g, "&amp;")
-                 .replace(/</g, "&lt;")
-                 .replace(/>/g, "&gt;")
-                 .replace(/"/g, "&quot;")
-                 .replace(/'/g, "&#039;");
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
 
     function render() {
@@ -238,7 +247,6 @@ OVERLAY_HTML = """<!DOCTYPE html>
       fetch(base + "/api/state")
         .then(function(r) { return r.json(); })
         .then(function(data) {
-          // 1. 버튼 상태 업데이트
           var ignore = data.ignore_streamer_chat || false;
           var btn = document.getElementById("btn-streamer");
           if(btn) {
@@ -247,81 +255,59 @@ OVERLAY_HTML = """<!DOCTYPE html>
           }
 
           var now = Date.now() / 1000;
+          var viewerList = (data.viewer_messages || []).filter(function(m) { return (now - (m.ts || now)) <= MAX_AGE; });
+          var assistantList = (data.assistant_messages || []).filter(function(m) { return (now - (m.ts || now)) <= MAX_AGE; });
 
-          // 2. 10분 지난 메시지 필터링 (빼먹었던 부분 복구!)
-          var viewerList = (data.viewer_messages || []).filter(function(m) {
-             return (now - (m.ts || now)) <= MAX_AGE;
-          });
-          var assistantList = (data.assistant_messages || []).filter(function(m) {
-             return (now - (m.ts || now)) <= MAX_AGE;
-          });
-
-          // 3. 스마트 업데이트 (깜빡임 해결의 핵심)
           updateColumn("col-viewer", viewerList, "viewer");
           updateColumn("col-assistant", assistantList, "assistant");
-
         })
         .catch(function(err) { console.error(err); });
     }
 
-    // 컬럼 업데이트 함수 (기존 내용을 덮어쓰지 않고 비교해서 수정함)
     function updateColumn(colId, messages, type) {
       var col = document.getElementById(colId);
       var validIds = new Set();
 
       messages.forEach(function(msg, index) {
-        // 메시지 고유 ID 생성 (타임스탬프 활용)
         var msgId = type + "-" + (msg.ts || 0) + "-" + index; 
         validIds.add(msgId);
 
         var el = document.getElementById(msgId);
 
-        // A. 새로운 메시지면? -> 만든다 (append)
         if (!el) {
           el = document.createElement("div");
           el.id = msgId;
           el.className = "row " + type;
-          
           var html = "";
-          if (type === "viewer") {
-             html += '<span class="name">' + escapeHtml(msg.user) + '</span>';
-          }
+          if (type === "viewer") { html += '<span class="name">' + escapeHtml(msg.user) + '</span>'; }
           html += '<div class="text">' + escapeHtml(msg.message) + '</div>';
-          
           el.innerHTML = html;
-          col.appendChild(el); // 톡! 추가 (전체 갱신 X)
-          
-          // 새 메시지 왔으니 스크롤 내리기
-          // col.scrollTop = col.scrollHeight; 
+          col.appendChild(el); 
         }
 
-        // B. 상태 업데이트 (답변 완료 / 이전 답변 처리)
-        // 시청자: processed 체크
+        if (el.classList.contains("removing")) return;
+
+        // [상태 업데이트]
         if (type === "viewer") {
            if (msg.processed && !el.classList.contains("processed")) {
               el.classList.add("processed");
            }
         }
-        // AI: 마지막 답변이 아니면 previous 처리
         if (type === "assistant") {
            var isLast = (index === messages.length - 1);
            if (!isLast && !el.classList.contains("previous")) {
               el.classList.add("previous");
            } else if (isLast && el.classList.contains("previous")) {
-              el.classList.remove("previous"); // 혹시 순서 꼬임 방지
+              el.classList.remove("previous");
            }
         }
       });
 
-      // C. 삭제된 메시지 정리 (10분 지난거 지우기)
-      // 현재 화면에는 있는데, API 리스트(validIds)에는 없는 애들을 찾아서 제거
       var children = Array.from(col.children);
       children.forEach(function(child) {
-        if (!validIds.has(child.id)) {
-           child.style.opacity = "0"; // 부드럽게 사라지기
-           setTimeout(function() { 
-             if(child.parentNode) child.parentNode.removeChild(child); 
-           }, 500); 
+        if (!validIds.has(child.id) && !child.classList.contains("removing")) {
+           child.classList.add("removing");
+           setTimeout(function() { if(child.parentNode) child.parentNode.removeChild(child); }, 500); 
         }
       });
     }
@@ -347,106 +333,7 @@ OVERLAY_HTML = """<!DOCTYPE html>
 
 @app.get("/", response_class=HTMLResponse)
 def overlay_page():
-    """OBS 브라우저 소스에 넣을 URL. 채팅/대사를 폴링해 표시."""
     return HTMLResponse(OVERLAY_HTML)
-
-
-TAROT_HTML = """<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>타로 오버레이</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: "Malgun Gothic", sans-serif; background: transparent; color: #1e293b; min-height: 100vh; padding: 12px; }
-    .tarot-panel { max-width: 90vw; margin: 0 auto; }
-    .phase-select { text-align: center; padding: 20px; }
-    .phase-select .deck-img { max-width: 180px; border-radius: 8px; }
-    .phase-select .hint { margin-top: 12px; font-size: 15px; color: #334155; }
-    .phase-select .requester { font-size: 13px; color: #64748b; margin-top: 6px; }
-    .phase-reveal { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
-    .phase-reveal .cards { display: flex; gap: 8px; flex-wrap: wrap; }
-    .phase-reveal .card-img { width: 100px; height: auto; border-radius: 6px; }
-    .phase-reveal .interpretation { flex: 1; min-width: 200px; padding: 10px; background: rgba(255,255,255,0.9); border-radius: 8px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
-    .phase-reveal .visual { margin-top: 8px; font-size: 12px; color: #64748b; }
-    .phase-reveal .reveal-footer { margin-top: 10px; font-size: 13px; color: #64748b; }
-    .phase-reveal .reveal-timer { font-weight: bold; color: #334155; }
-    .phase-failed { text-align: center; padding: 20px; color: #64748b; }
-    .hidden { display: none; }
-  </style>
-</head>
-<body>
-  <div class="tarot-panel" id="tarot-panel"></div>
-  <script>
-    var base = window.location.origin || (window.location.protocol + "//" + window.location.host);
-    function cardSrc(id, reversed) {
-      var path = reversed ? "/tarot-assets/reverse/tarot_" + id + "_r.png" : "/tarot-assets/tarot_" + id + ".png";
-      return base + path;
-    }
-    function render() {
-      fetch(base + "/api/state").then(function(r) { return r.json(); }).then(function(data) {
-        var tarot = data.tarot || null;
-        var el = document.getElementById("tarot-panel");
-        if (!tarot || !tarot.visible) {
-          el.innerHTML = "";
-          el.className = "tarot-panel";
-          return;
-        }
-        if (tarot.phase === "selecting") {
-          var need = tarot.spread_count || 3;
-          var hintText = need === 1 ? '1~78번 중 번호 하나만 골라주세요.' : ('1~78번 중 번호 ' + need + '개 골라주세요.');
-          var deadline = tarot.select_deadline_ts || 0;
-          var nowSec = Date.now() / 1000;
-          var remain = Math.max(0, Math.floor(deadline - nowSec));
-          var min = Math.floor(remain / 60);
-          var sec = remain % 60;
-          var timeStr = (min > 0 ? min + '분 ' : '') + sec + '초';
-          el.innerHTML = '<div class="phase-select">' +
-            '<img class="deck-img" src="' + base + '/tarot-assets/tarot_back.png" alt="덱" onerror="this.style.display=\\'none\\'">' +
-            '<div class="hint">' + hintText + '</div>' +
-            (deadline ? '<div class="requester">남은 시간 ' + timeStr + '</div>' : '') +
-            (tarot.requester_nickname ? '<div class="requester">' + (tarot.requester_nickname || "") + '님</div>' : '') +
-            '</div>';
-          el.className = "tarot-panel";
-          return;
-        }
-        if (tarot.phase === "revealed" && tarot.cards && tarot.cards.length) {
-          var cardsHtml = tarot.cards.map(function(c) {
-            return '<img class="card-img" src="' + cardSrc(c.id, c.reversed) + '" alt="' + (c.id || "") + '">';
-          }).join("");
-          var interp = (tarot.interpretation || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-          var visual = tarot.visual_data ? '<div class="visual">[시각화] ' + (tarot.visual_data.visual_type || "") + '</div>' : "";
-          var footer = '';
-          if (tarot.auto_reset_at_ts) {
-            var nowSec = Date.now() / 1000;
-            var left = Math.max(0, Math.floor(tarot.auto_reset_at_ts - nowSec));
-            var m = Math.floor(left / 60);
-            var s = left % 60;
-            footer = '<div class="reveal-footer">궁금하신 점이 있으면 말씀해주세요. <span class="reveal-timer">' + m + ':' + (s < 10 ? '0' : '') + s + '</span> 후 자동으로 닫힙니다.</div>';
-          }
-          el.innerHTML = '<div class="phase-reveal">' +
-            '<div class="cards">' + cardsHtml + '</div>' +
-            '<div class="interpretation">' + interp + visual + footer + '</div>' +
-            '</div>';
-          el.className = "tarot-panel";
-          return;
-        }
-        if (tarot.phase === "failed") {
-          var msg = (tarot.message || "해석을 불러오지 못했어요.").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-          el.innerHTML = '<div class="phase-failed">' + msg + '</div>';
-          el.className = "tarot-panel";
-          return;
-        }
-        el.innerHTML = "";
-      }).catch(function() { document.getElementById("tarot-panel").innerHTML = ""; });
-    }
-    render();
-    setInterval(render, 500);
-  </script>
-</body>
-</html>
-"""
 
 
 _TAROT_HTML_PATH = Path(__file__).resolve().parent / "tarot_overlay.html"
@@ -454,7 +341,6 @@ _TAROT_HTML_PATH = Path(__file__).resolve().parent / "tarot_overlay.html"
 
 @app.get("/tarot", response_class=HTMLResponse)
 def tarot_page():
-    """타로 전용 오버레이. OBS 브라우저 소스에 http://127.0.0.1:8765/tarot 로 추가."""
     if _TAROT_HTML_PATH.is_file():
         return HTMLResponse(_TAROT_HTML_PATH.read_text(encoding="utf-8"))
-    return HTMLResponse(TAROT_HTML)
+    return HTMLResponse("<h1>Error: tarot_overlay.html 파일을 찾을 수 없습니다.</h1>", status_code=404)
