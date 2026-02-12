@@ -301,7 +301,7 @@ class GroqClient:
             return "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
 
     def _reply_batch_with_search(self, messages: List[dict], start_time: float, max_iterations: int = 3) -> Optional[str]:
-        """도구(search_web) 루프: tool_calls 있으면 검색 실행 후 재호출, content 나올 때까지 반복."""
+        """도구(search_web) 루프: tool_calls 있으면 검색 실행 후 재호출, content 나올 때까지 반복. 최종 답변이 평문이면 JSON으로 한 번 더 요청."""
         for _ in range(max_iterations):
             response = self._client.chat.completions.create(
                 model=self.model,
@@ -312,7 +312,34 @@ class GroqClient:
             )
             msg = response.choices[0].message
             if not getattr(msg, "tool_calls", None):
-                return (msg.content or "").strip()
+                content = (msg.content or "").strip()
+                if not content:
+                    return None
+                # 검색 경로는 모델이 평문으로 답할 수 있음 → replies JSON이면 그대로, 아니면 JSON으로 한 번 더 요청
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, dict) and isinstance(data.get("replies"), list) and len(data["replies"]) > 0:
+                        return content
+                except json.JSONDecodeError:
+                    pass
+                # 평문이면 동일 형식(JSON)으로 다시 요청
+                formatted = messages + [
+                    {"role": "assistant", "content": content},
+                    {"role": "user", "content": "위 답변을 그대로 유지한 채, 아래 JSON 형식 한 줄로만 출력하세요. 설명·마크다운 없이. {\"replies\": [{\"response\": \"위 답변 내용 전체\", \"emotion\": \"neutral\"}]}"},
+                ]
+                try:
+                    resp2 = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=formatted,
+                        max_tokens=1024,
+                        response_format={"type": "json_object"},
+                    )
+                    out = (resp2.choices[0].message.content or "").strip()
+                    if out:
+                        return out
+                except Exception as e:
+                    logger.warning("검색 답변 JSON 재요청 실패, 평문 반환: %s", e)
+                return content
             messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": msg.tool_calls})
             for tc in msg.tool_calls:
                 name = getattr(tc.function, "name", None) or ""
@@ -428,11 +455,33 @@ class GroqClient:
                 except Exception as retry_e:
                     logger.exception("Groq batch 피드백 재시도 실패: %s", retry_e)
                     return []
+            elif "400" in err_msg and ("tool_use_failed" in err_msg or "request.tools" in err_msg) and "json" in err_msg:
+                # 모델이 등록되지 않은 도구 'json'으로 답변을 보낸 경우: failed_generation에서 replies 추출
+                failed_gen = _extract_failed_generation(e)
+                if failed_gen:
+                    try:
+                        data = json.loads(failed_gen)
+                        if isinstance(data, dict) and data.get("name") == "json":
+                            args = data.get("arguments")
+                            if isinstance(args, dict) and "replies" in args:
+                                raw = json.dumps(args)
+                    except Exception:
+                        pass
+                if not raw or not raw.strip():
+                    logger.warning("Groq tool_use_failed(json) 복구 실패: %s", e)
+                    return []
             else:
                 logger.exception("Groq batch 호출 실패: %s", e)
                 return []
         elapsed = time.perf_counter() - start
         if not raw or not raw.strip():
+            if search_enabled:
+                return [AIResponse(
+                    response="검색으로는 찾지 못했어요. 다른 방법으로 확인해 보시면 좋을 것 같아요.",
+                    emotion="neutral",
+                    confidence=1.0,
+                    processing_time=elapsed,
+                )]
             return []
 
         try:
@@ -485,9 +534,25 @@ class GroqClient:
                         tarot_spread_count=spread_count,
                         tts_text=tts_text or None,
                     ))
+            # 웹 검색 경로: 모델이 JSON이 아닌 평문으로 답할 수 있음 → 그대로 한 개 답변으로 사용
+            if not out and (raw or "").strip():
+                out.append(AIResponse(
+                    response=(raw or "").strip(),
+                    emotion="neutral",
+                    confidence=1.0,
+                    processing_time=elapsed,
+                ))
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("Groq batch JSON 파싱 실패: %s", e)
+            # 검색 등으로 평문만 온 경우 그대로 한 개 답변으로 반환
+            if raw and (raw or "").strip():
+                return [AIResponse(
+                    response=(raw or "").strip(),
+                    emotion="neutral",
+                    confidence=1.0,
+                    processing_time=time.perf_counter() - start,
+                )]
             return []
 
     def get_tarot_interpretation(
