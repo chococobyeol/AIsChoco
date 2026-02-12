@@ -244,21 +244,26 @@ class ChzzkSocketIOClient(ChatClient):
                     return
             if not isinstance(data, dict):
                 return
-            nickname = (data.get("donatorNickname") or "").strip() or "시청자"
-            pay_amount = (data.get("payAmount") or "").strip() or "0"
-            donation_text = (data.get("donationText") or "").strip()
+            # 문서는 payAmount를 String이라 하나, 실제 API는 int(1000) 등으로 올 수 있음
+            nickname = (str(data.get("donatorNickname") or "").strip()) or "시청자"
+            raw_pay = data.get("payAmount")
+            pay_amount = str(raw_pay).strip() if raw_pay is not None else "0"
+            if not pay_amount:
+                pay_amount = "0"
+            donation_text = str(data.get("donationText") or "").strip()
             if donation_text:
                 message_text = f"{pay_amount}원 후원: {donation_text}"
             else:
                 message_text = f"{pay_amount}원 후원했습니다"
             timestamp = datetime.now()
+            uid = data.get("donatorChannelId")
             msg = self._create_message(
                 user=nickname,
                 message=message_text,
                 timestamp=timestamp,
                 emoticons=[],
                 message_id=None,
-                user_id=data.get("donatorChannelId"),
+                user_id=str(uid) if uid is not None else None,
                 user_badge="donation",
             )
             if self.on_message:
