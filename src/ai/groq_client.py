@@ -461,7 +461,7 @@ class GroqClient:
                 if failed_gen:
                     try:
                         data = json.loads(failed_gen)
-                        if isinstance(data, dict) and data.get("name") == "json":
+                        if isinstance(data, dict) and (data.get("name") or "").strip().lower() == "json":
                             args = data.get("arguments")
                             if isinstance(args, dict) and "replies" in args:
                                 raw = json.dumps(args)
