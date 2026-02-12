@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 8K 제한: 최근 5K 유지, 7K 도달 시 요약
-DEFAULT_MAX_TOKENS = 5000
+# rate limit 완화: API에 넘기는 컨텍스트 상한 축소 (5K→3K). 7K 도달 시 요약.
+DEFAULT_MAX_TOKENS = 3000
 DEFAULT_SUMMARY_THRESHOLD = 7000
 DEFAULT_SUMMARY_TOKENS = 2000  # 요약 시 잘라낼 오래된 분량
 

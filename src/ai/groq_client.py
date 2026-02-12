@@ -436,10 +436,11 @@ class GroqClient:
         ]
 
         try:
+            # 해석 문장이 길면 1024로는 JSON 완성 전에 한도 도달 → 2048로 여유
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=1024,
+                max_tokens=2048,
                 response_format={"type": "json_object"},
             )
             raw = (response.choices[0].message.content or "").strip()
