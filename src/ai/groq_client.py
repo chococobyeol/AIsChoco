@@ -393,6 +393,15 @@ class GroqClient:
                 raw = response.choices[0].message.content
         except Exception as e:
             err_msg = str(e).lower()
+            if "429" in err_msg or "rate_limit" in err_msg:
+                # Groq는 TPM(분당)·TPD(일일) 둘 다 있음. 에러에 TPD만 적혀도 실제로는 TPM으로 걸렸을 수 있어, 잠시 후 재시도하면 될 때가 있음.
+                e_str = str(e)
+                if "tokens per day" in e_str.lower() or "tpd" in e_str.lower():
+                    hint = "에러는 TPD(일일) 표시지만, TPM(분당 8K)일 수 있음. 1분 후 재시도 또는 한도 리셋 후 재시도."
+                else:
+                    hint = "TPM(분당) 또는 TPD(일일) 한도. 1분 후 재시도 또는 한도 리셋 후 재시도."
+                logger.warning("Groq 429 Rate limit: %s 원문: %s", hint, e_str[:280])
+                return []
             if "400" in err_msg and "json_validate_failed" in err_msg:
                 failed_gen = _extract_failed_generation(e)
                 if failed_gen:

@@ -490,7 +490,7 @@ async def reply_worker(
                 search_enabled,
             )
             if not replies:
-                logger.info("답변 없음 (모델이 replies 빈 배열 반환 또는 파싱 실패)")
+                logger.info("답변 없음 (API 한도 429 또는 파싱 실패 시 위 Groq 로그 확인)")
 
             for ai_response in replies:
                 if not (ai_response.response or "").strip():
@@ -542,18 +542,21 @@ async def reply_worker(
                     # AI가 타로 액션 없이 답했으면 = 거절/모르겠음 판단 → 타로 해제
                     overlay_state["tarot"] = None
 
-                try:
-                    chat_tts = getattr(ai_response, "tts_text", None) or ai_response.response
-                    path = await asyncio.to_thread(
-                        _tts_synthesize_only,
-                        tts_service,
-                        text_for_tts_numbers(chat_tts),
-                        ai_response.emotion,
-                        "Korean",
-                    )
-                except Exception as tts_e:
-                    logger.exception("TTS 오류: %s", tts_e)
-                    continue
+                chat_tts = getattr(ai_response, "tts_text", None) or ai_response.response
+                tts_input = text_for_tts_numbers(chat_tts)
+                path = None
+                if tts_input.strip() and tts_input != ".":
+                    try:
+                        path = await asyncio.to_thread(
+                            _tts_synthesize_only,
+                            tts_service,
+                            tts_input,
+                            ai_response.emotion,
+                            "Korean",
+                        )
+                    except Exception as tts_e:
+                        logger.exception("TTS 오류: %s", tts_e)
+                        path = None
                 overlay_state.setdefault("assistant_messages", []).append({
                     "message": str(ai_response.response or ""),
                     "ts": time.time(),
@@ -573,21 +576,22 @@ async def reply_worker(
                         await vts_client.set_emotion(ai_response.emotion)
                     except Exception as vts_e:
                         logger.debug("VTS 포즈 실패: %s", vts_e)
-                try:
-                    is_speaking[0] = True
-                    play_task = asyncio.create_task(
-                        asyncio.to_thread(tts_service.play_file, path)
-                    )
-                    if vts_client:
-                        await asyncio.sleep(0.5)
-                        await _animate_look_back_to_center(
-                            vts_client, start_x=0.8, start_y=-0.9, duration_sec=0.4
+                if path:
+                    try:
+                        is_speaking[0] = True
+                        play_task = asyncio.create_task(
+                            asyncio.to_thread(tts_service.play_file, path)
                         )
-                    await play_task
-                except Exception as play_e:
-                    logger.warning("재생 실패: %s", play_e)
-                finally:
-                    is_speaking[0] = False
+                        if vts_client:
+                            await asyncio.sleep(0.5)
+                            await _animate_look_back_to_center(
+                                vts_client, start_x=0.8, start_y=-0.9, duration_sec=0.4
+                            )
+                        await play_task
+                    except Exception as play_e:
+                        logger.warning("재생 실패: %s", play_e)
+                    finally:
+                        is_speaking[0] = False
             chat_history.flush_summary(groq_client)
         except asyncio.CancelledError:
             break
