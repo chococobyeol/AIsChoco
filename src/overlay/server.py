@@ -68,14 +68,14 @@ def clear_tarot():
 
 
 # ==============================================================================
-# 채팅 오버레이 HTML (최종 수정: 분위기 맞춤형)
+# 채팅 오버레이 HTML (최종 수정: ID 생성 로직 변경으로 깜빡임 원천 차단)
 # ==============================================================================
 OVERLAY_HTML = """<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Chat Overlay Soft</title>
+  <title>Chat Overlay Final v4</title>
   <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -88,7 +88,7 @@ OVERLAY_HTML = """<!DOCTYPE html>
       width: 100vw;
       padding: 15px;
       display: flex;
-      gap: 24px; /* 좌우 간격 조금 더 넓게 */
+      gap: 24px;
       overflow: hidden;
     }
 
@@ -112,11 +112,9 @@ OVERLAY_HTML = """<!DOCTYPE html>
       line-height: 1.5;
       word-break: break-word;
       
-      /* 기본 상태: 은은한 그림자 */
       box-shadow: 0 4px 6px rgba(0,0,0,0.1);
       backdrop-filter: blur(5px);
       
-      /* 애니메이션 및 트랜지션 */
       opacity: 0;
       transform: translateY(20px);
       animation: slideUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
@@ -127,43 +125,33 @@ OVERLAY_HTML = """<!DOCTYPE html>
       to { opacity: 1; transform: translateY(0); }
     }
 
-    /* -----------------------------------------------------------
-       [왼쪽: AI] - 웜톤 (방 안 조명 느낌)
-       ----------------------------------------------------------- */
+    /* [왼쪽: AI] */
     .row.assistant {
       align-self: flex-start;
       text-align: left;
-      /* 배경: 짙은 웜그레이 */
       background: rgba(60, 55, 50, 0.85);
-      color: #fff8e1; /* 상아색 폰트 */
+      color: #fff8e1;
       max-width: 90%;
-      
-      /* [Active 효과] 은은한 주황색 발광 (테두리 아님) */
       box-shadow: 0 0 15px rgba(251, 191, 36, 0.2), 0 4px 6px rgba(0,0,0,0.2);
       border-left: 4px solid rgba(251, 191, 36, 0.8);
     }
 
-    /* [AI 이전 답변] - 빛이 꺼진 느낌 */
+    /* [AI 이전 답변] */
     .row.assistant.previous {
-      background: rgba(45, 40, 35, 0.6); /* 더 투명하게 */
-      color: #d1d5db; /* 약간 회색조 */
-      box-shadow: none; /* 발광 제거 */
-      border-left-color: rgba(255,255,255,0.2); /* 포인트 색상 죽임 */
+      background: rgba(45, 40, 35, 0.6);
+      color: #d1d5db;
+      box-shadow: none;
+      border-left-color: rgba(255,255,255,0.2);
       transform: scale(0.98);
     }
 
-    /* -----------------------------------------------------------
-       [오른쪽: 시청자] - 쿨톤 (창밖 밤하늘 느낌)
-       ----------------------------------------------------------- */
+    /* [오른쪽: 시청자] */
     .row.viewer {
       align-self: flex-end;
       text-align: right;
-      /* 배경: 짙은 네이비 */
       background: rgba(30, 41, 59, 0.85);
       color: #f1f5f9;
       max-width: 90%;
-
-      /* [Active 효과] 은은한 하늘색 발광 */
       box-shadow: 0 0 15px rgba(56, 189, 248, 0.2), 0 4px 6px rgba(0,0,0,0.2);
       border-right: 4px solid rgba(56, 189, 248, 0.8);
     }
@@ -176,14 +164,14 @@ OVERLAY_HTML = """<!DOCTYPE html>
       margin-bottom: 5px;
     }
 
-    /* [답변 완료된 시청자] - 빛이 꺼지고 뒤로 물러난 느낌 */
+    /* [답변 완료된 시청자] */
     .row.viewer.processed {
-      background: rgba(15, 23, 42, 0.5); /* 투명도 높여서 배경에 묻히게 */
-      color: #94a3b8; /* 글자색 회색으로 */
-      box-shadow: none; /* 발광 제거 */
-      border-right-color: rgba(255,255,255,0.1); /* 포인트 색상 죽임 */
-      transform: scale(0.98); /* 살짝 작아짐 */
-      filter: grayscale(0.5); /* 채도 뺌 */
+      background: rgba(15, 23, 42, 0.5);
+      color: #94a3b8;
+      box-shadow: none;
+      border-right-color: rgba(255,255,255,0.1);
+      transform: scale(0.98);
+      filter: grayscale(0.5);
     }
 
     /* [사라질 때] */
@@ -194,7 +182,6 @@ OVERLAY_HTML = """<!DOCTYPE html>
       pointer-events: none;
     }
 
-    /* [버튼] */
     .btn-area {
       position: fixed;
       top: 15px;
@@ -269,7 +256,11 @@ OVERLAY_HTML = """<!DOCTYPE html>
       var validIds = new Set();
 
       messages.forEach(function(msg, index) {
-        var msgId = type + "-" + (msg.ts || 0) + "-" + index; 
+        // [핵심 수정] ID 생성 시 index를 제거하고 고유값(timestamp + user) 사용
+        // 이렇게 해야 목록 순서가 바뀌어도 "같은 메시지"로 인식합니다.
+        var safeUser = (msg.user || 'anon').replace(/[^a-zA-Z0-9]/g, '');
+        var msgId = type + "-" + (msg.ts || 0) + "-" + safeUser; 
+        
         validIds.add(msgId);
 
         var el = document.getElementById(msgId);
@@ -287,7 +278,6 @@ OVERLAY_HTML = """<!DOCTYPE html>
 
         if (el.classList.contains("removing")) return;
 
-        // [상태 업데이트]
         if (type === "viewer") {
            if (msg.processed && !el.classList.contains("processed")) {
               el.classList.add("processed");
