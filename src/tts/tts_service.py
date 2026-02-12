@@ -48,11 +48,21 @@ _NUM_KOR_CNT = ("", "한", "두", "세", "네", "다섯", "여섯", "일곱", "�
 
 
 def text_for_tts_numbers(text: str) -> str:
-    """TTS용: '1번'→'일 번', '78번'→'칠십팔 번', '3개'→'세 개' 등으로 바꿔서 한번이 아닌 일번으로 읽히게 함. 표시용 텍스트는 그대로 두고 TTS에만 이 결과를 넘기면 됨."""
+    """TTS용: 채팅용 자모(ㅋㅎㄷㄷㅠㅜㅡ) 제거 후 '1번'→'일 번', '78번'→'칠십팔 번' 등 변환. TTS에만 이 결과를 넘기면 됨."""
     if not text or not text.strip():
         return text
     import re
     s = text
+    # TTS에서 이상하게 읽히는 채팅 용어 제거 (1개든 여러 개든 전부)
+    s = re.sub(r"ㅋ+", "", s)
+    s = re.sub(r"ㅎ+", "", s)
+    s = re.sub(r"ㄷㄷ", "", s)
+    s = re.sub(r"ㅠ+", "", s)
+    s = re.sub(r"ㅜ+", "", s)
+    s = re.sub(r"ㅡ+", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return "."  # 전부 채팅용 자모면 TTS에 넘기지 않고 짧은 대체
     # N번 (1~78) → 한글 번 (긴 숫자부터 치환해 7번이 7번으로만 매칭되게)
     for n in range(78, 0, -1):
         if n < len(_NUM_KOR):

@@ -9,14 +9,35 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, List, Optional
 
 from openai import OpenAI
 
 from .models import AIResponse, VALID_EMOTIONS
+from .web_search import run_web_search
 
 logger = logging.getLogger(__name__)
+
+# 웹 검색 도구 스키마 (모델이 필요 시 호출)
+SEARCH_WEB_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_web",
+        "description": "최신 정보, 뉴스, 날씨, 시세 등 사용자가 현재/실제 정보를 요청할 때 웹 검색을 수행합니다. 검색이 필요 없다면 호출하지 마세요.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색 쿼리 (한국어 가능)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
 
 
 def _parse_numbers_1_78(text: str) -> List[int]:
@@ -88,6 +109,11 @@ JSON 형식 (한 줄, 설명 없이):
 {"replies": [{"response": "한 문장(화면 표시용)", "tts_text": "TTS로 읽었을 때 한국어로 자연스럽게 들리도록 같은 내용을 말하기 좋은 문장(선택)", "emotion": "감정키", "action": "tarot_ask_question"|"tarot"|생략, "tarot_question": "주제"|""|생략, "tarot_spread_count": 1|2|3|4|5}]}
 action이 "tarot"일 때는 tarot_spread_count 반드시 1~5 중 하나로 넣기. 생략하지 말 것.
 replies는 최대 1개. emotion은 반드시: happy, sad, angry, surprised, neutral, excited 중 하나. tts_text 없으면 response로 TTS."""
+
+# 검색 도구 사용 시 추가 지시 (최종 답변은 동일 JSON)
+BATCH_SYSTEM_PROMPT_SEARCH_SUFFIX = """
+
+웹 검색: 시청자가 최신 뉴스, 날씨, 시세, 현재 정보 등을 물을 때는 search_web 도구를 호출하세요. 검색이 필요 없다면 도구를 호출하지 말고 바로 위 JSON 형식으로 답하세요. 검색 결과를 받은 뒤에는 그 내용을 바탕으로 한 문장으로 요약해, 반드시 같은 JSON 한 줄만 출력하세요. 시간·날짜를 물어보면 [현재 시각 (한국 기준)]이 있으면 그 값을 쓰고, 별말 없으면 한국 시간 기준으로 답하세요."""
 
 SUMMARIZE_PROMPT = """다음 대화 내용을 간결하게 요약해주세요. 중요한 맥락과 주제는 유지하세요. 한국어로 한 문단 이내."""
 
@@ -274,18 +300,47 @@ class GroqClient:
             logger.warning("타로 대기 멘트 생성 실패: %s", e)
             return "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
 
+    def _reply_batch_with_search(self, messages: List[dict], start_time: float, max_iterations: int = 3) -> Optional[str]:
+        """도구(search_web) 루프: tool_calls 있으면 검색 실행 후 재호출, content 나올 때까지 반복."""
+        for _ in range(max_iterations):
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=1024,
+                tools=[SEARCH_WEB_TOOL],
+                tool_choice="auto",
+            )
+            msg = response.choices[0].message
+            if not getattr(msg, "tool_calls", None):
+                return (msg.content or "").strip()
+            messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": msg.tool_calls})
+            for tc in msg.tool_calls:
+                name = getattr(tc.function, "name", None) or ""
+                args_str = getattr(tc.function, "arguments", None) or "{}"
+                try:
+                    args = json.loads(args_str)
+                except json.JSONDecodeError:
+                    args = {}
+                if name == "search_web":
+                    query = args.get("query", "").strip()
+                    result = run_web_search(query)
+                    logger.info("search_web 실행: query=%r, 결과 %d자", query, len(result))
+                else:
+                    result = "도구를 처리할 수 없습니다."
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+        return None
+
     def reply_batch(
         self,
         pending: List[Any],
         context_messages: Optional[List[dict]] = None,
         tarot_state: Optional[dict] = None,
         tarot_enabled: bool = True,
+        search_enabled: bool = False,
     ) -> List[AIResponse]:
         """
         말하는 동안 쌓인 채팅을 한 번에 보고, 합치기/걸러내기 후 답변 1개 생성 (길어도 됨).
-        pending: .user, .message 속성 있는 객체 리스트 (ChatMessage 등).
-        tarot_state: 현재 타로 상태. phase가 "asking_question"이면 방금 채팅이 "뭐에 대해 볼지"에 대한 답이므로, 주제면 action tarot, 거절/모르겠음이면 action 없이 일반 답변.
-        tarot_enabled: False면 타로 기능 비활성화. 타로 요청해도 AI가 거절만 하도록 안내.
+        search_enabled: True면 search_web 도구 사용 가능. 모델이 필요 시 검색 후 답변.
         """
         if not pending:
             return []
@@ -310,7 +365,15 @@ class GroqClient:
         elif tarot_state and tarot_state.get("phase") == "asking_question":
             user_content += "\n\n[현재 타로 단계: 시청자가 \"뭐에 대해 볼지\"에 답한 상태. 위 채팅이 그 답변. 주제를 말했으면 action \"tarot\", tarot_question에 주제, **tarot_spread_count에 주제에 맞는 장수(1~5)를 반드시 넣을 것.** 예/아니오 질문→1, 단순 주제→3, 장기·복잡→5. response에는 그 주제로 볼게요 + 1~78 중 N개 골라달라는 멘트를 존댓말로. 거절·모르겠음·없음이면 일반 답변만, action 넣지 말 것.]"
 
-        messages = [{"role": "system", "content": self._system_prompt(BATCH_SYSTEM_PROMPT)}]
+        if search_enabled:
+            kst = timezone(timedelta(hours=9))
+            now_str = datetime.now(kst).strftime("%Y-%m-%d %H:%M KST")
+            user_content += f"\n\n[현재 시각 (한국 기준): {now_str}]"
+
+        system_content = self._system_prompt(BATCH_SYSTEM_PROMPT)
+        if search_enabled:
+            system_content += BATCH_SYSTEM_PROMPT_SEARCH_SUFFIX
+        messages = [{"role": "system", "content": system_content}]
         if context_messages:
             messages.extend(context_messages)
         messages.append({"role": "user", "content": user_content})
@@ -318,13 +381,16 @@ class GroqClient:
         start = time.perf_counter()
         raw = None
         try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=1024,
-                response_format={"type": "json_object"},
-            )
-            raw = response.choices[0].message.content
+            if search_enabled:
+                raw = self._reply_batch_with_search(messages, start)
+            else:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=1024,
+                    response_format={"type": "json_object"},
+                )
+                raw = response.choices[0].message.content
         except Exception as e:
             err_msg = str(e).lower()
             if "400" in err_msg and "json_validate_failed" in err_msg:

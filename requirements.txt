@@ -12,6 +12,9 @@ python-dotenv>=1.0.0
 # Groq API (OpenAI-compatible)
 openai>=1.0.0
 
+# 웹 검색 (모델이 필요 시 검색 도구 호출용, DuckDuckGo) — 2026년 2월 기준 ddgs 9.x
+ddgs>=9.0.0
+
 # TTS (Qwen3-TTS). For GPU: install PyTorch with CUDA first, then pip install -r requirements.txt
 # Stable options: cu118 (11.8), cu126 (12.6), cu128 (12.8). Example: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 # Check https://pytorch.org/get-started/locally/ and pick Compute Platform matching your driver.

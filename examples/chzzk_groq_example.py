@@ -201,6 +201,7 @@ async def reply_worker(
             pending_msgs = [m for m, _ in pending]
             pending_ids = [oid for _, oid in pending]
             tarot_enabled = os.environ.get("TAROT_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+            search_enabled = os.environ.get("WEB_SEARCH_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
             if not tarot_enabled:
                 overlay_state["tarot"] = None
             tarot = overlay_state.get("tarot")
@@ -481,7 +482,12 @@ async def reply_worker(
             tarot_state = overlay_state.get("tarot")
 
             replies = await asyncio.to_thread(
-                groq_client.reply_batch, pending_msgs, context, tarot_state, tarot_enabled
+                groq_client.reply_batch,
+                pending_msgs,
+                context,
+                tarot_state,
+                tarot_enabled,
+                search_enabled,
             )
             if not replies:
                 logger.info("답변 없음 (모델이 replies 빈 배열 반환 또는 파싱 실패)")

@@ -157,12 +157,14 @@ class ChzzkSocketIOClient(ChatClient):
             msg_type = data.get("type")
             
             if msg_type == "connected":
-                # 연결 완료 메시지: sessionKey 저장 및 채널 구독
+                # 연결 완료 메시지: sessionKey 저장 및 채널·후원 구독
                 self.session_key = data.get("data", {}).get("sessionKey")
                 logger.info(f"[{self.platform_name}] 세션 키 획득: {self.session_key}")
                 
-                # 채널 구독 요청
+                # 채널(채팅) 구독 요청
                 await self._subscribe_channel()
+                # 후원 이벤트 구독 (같은 세션, 같은 채널)
+                await self._subscribe_donation()
                 
             elif msg_type == "subscribed":
                 # 구독 완료 메시지
@@ -204,6 +206,68 @@ class ChzzkSocketIOClient(ChatClient):
 
         # 채팅 메시지 이벤트 핸들러 등록 (소켓으로 CHAT 이벤트 수신)
         self.sio.on("CHAT", self._on_chat_message)
+
+    async def _subscribe_donation(self):
+        """
+        후원 이벤트 구독 (문서: POST /open/v1/sessions/events/subscribe/donation)
+        채팅과 동일 세션에 channelId로 구독.
+        """
+        if not self.session_key:
+            return
+        if not self.access_token:
+            logger.warning(f"[{self.platform_name}] 후원 구독에 Access Token이 필요합니다")
+            return
+        # 문서: POST .../subscribe/donation, Request Param sessionKey (후원 조회 Scope)
+        url = f"{self.api_base_url}/open/v1/sessions/events/subscribe/donation"
+        headers = {"Authorization": f"Bearer {self.access_token}", "Content-Type": "application/json"}
+        params = {"sessionKey": self.session_key, "channelId": self.channel_id}
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, params=params, headers=headers)
+                response.raise_for_status()
+            logger.info(f"[{self.platform_name}] 후원 이벤트 구독 요청 완료: {self.channel_id}")
+            self.sio.on("DONATION", self._on_donation_message)
+        except Exception as e:
+            logger.warning(f"[{self.platform_name}] 후원 구독 실패 (채팅만 사용): {e}")
+
+    async def _on_donation_message(self, data):
+        """
+        후원 이벤트 수신 (Event Type: DONATION)
+        문서: donatorNickname, payAmount, donationText 등
+        채팅 큐와 동일하게 on_message로 넘겨 AI/TTS가 감사 반응하도록 함.
+        """
+        try:
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    return
+            if not isinstance(data, dict):
+                return
+            nickname = (data.get("donatorNickname") or "").strip() or "시청자"
+            pay_amount = (data.get("payAmount") or "").strip() or "0"
+            donation_text = (data.get("donationText") or "").strip()
+            if donation_text:
+                message_text = f"{pay_amount}원 후원: {donation_text}"
+            else:
+                message_text = f"{pay_amount}원 후원했습니다"
+            timestamp = datetime.now()
+            msg = self._create_message(
+                user=nickname,
+                message=message_text,
+                timestamp=timestamp,
+                emoticons=[],
+                message_id=None,
+                user_id=data.get("donatorChannelId"),
+                user_badge="donation",
+            )
+            if self.on_message:
+                cb = self.on_message(msg)
+                if asyncio.iscoroutine(cb):
+                    await cb
+            logger.info(f"[{self.platform_name}] 후원 수신: {nickname} {pay_amount}원")
+        except Exception as e:
+            logger.error(f"[{self.platform_name}] 후원 메시지 처리 오류: {e}", exc_info=True)
     
     async def _on_chat_message(self, data):
         """
