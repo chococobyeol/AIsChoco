@@ -170,6 +170,7 @@ async def reply_worker(
     vts_client: Optional[VTSClient],
     chat_history: ChatHistory,
     is_speaking: List[bool],
+    channel_id: Optional[str] = None,
 ):
     """
     큐에서 메시지를 꺼내, 말 끝난 뒤에만 일괄 처리.
@@ -205,6 +206,21 @@ async def reply_worker(
             if not tarot_enabled:
                 overlay_state["tarot"] = None
             tarot = overlay_state.get("tarot")
+
+            # ----- "그만", "중단" 등이면 타로 창 즉시 닫기 (스트리머 또는 타로 요청자만)
+            if tarot:
+                requester_id = (tarot.get("requester_id") or "").strip()
+                for m in pending_msgs:
+                    msg = (getattr(m, "message", "") or "").strip()
+                    if not any(kw in msg for kw in ("그만", "중단", "그만둬", "그만해", "그만좀", "관두", "안 해", "안해", "타로 그만", "안 볼")):
+                        continue
+                    uid = getattr(m, "user_id", None) or ""
+                    is_streamer = bool(channel_id and uid and str(uid) == str(channel_id))
+                    is_requester = bool(requester_id and uid and str(uid) == str(requester_id))
+                    if is_streamer or is_requester:
+                        overlay_state["tarot"] = None
+                        tarot = None
+                        break
 
             # ----- 타로 "뭐에 대해 볼지" 단계는 AI 판단으로 처리: 일반 채팅으로 넘겨 reply_batch에서 tarot_state 전달
 
@@ -636,7 +652,7 @@ async def main():
     queue: asyncio.Queue = asyncio.Queue()
     worker_task = asyncio.create_task(
         reply_worker(
-            queue, groq_client, tts_service, vts_client, chat_history, is_speaking
+            queue, groq_client, tts_service, vts_client, chat_history, is_speaking, channel_id
         )
     )
     tarot_timeout_task = asyncio.create_task(tarot_timeout_worker())
