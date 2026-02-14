@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+import ast
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, List, Optional
@@ -65,6 +66,24 @@ def _extract_failed_generation(err: Exception) -> str:
             if hasattr(resp, "json"):
                 data = resp.json()
                 return (data.get("error") or {}).get("failed_generation") or ""
+    except Exception:
+        pass
+
+    # 일부 클라이언트/예외 타입은 failed_generation을 str(err) 안에만 담아 전달한다.
+    # 예: "Error code: 400 - {'error': {..., 'failed_generation': '{\"name\":\"JSON\",...}'}}"
+    try:
+        e_text = str(err or "")
+        brace = e_text.find("{")
+        if brace != -1:
+            payload_text = e_text[brace:]
+            payload = ast.literal_eval(payload_text)
+            if isinstance(payload, dict):
+                fg = (payload.get("error") or {}).get("failed_generation")
+                if isinstance(fg, str) and fg.strip():
+                    return fg
+                fg2 = payload.get("failed_generation")
+                if isinstance(fg2, str) and fg2.strip():
+                    return fg2
     except Exception:
         pass
     return ""
