@@ -1,6 +1,7 @@
 # 로깅 가이드
 
 `examples/chzzk_groq_example.py`, `examples/chzzk_chat_example.py` 실행 시 공통 로깅 설정이 자동 적용됩니다.
+`examples/chzzk_groq_example.py`의 AI/TTS 파이프라인 로그에는 `rid=<request_id>`가 포함되어 한 턴을 추적할 수 있습니다.
 
 ## 기본 동작
 

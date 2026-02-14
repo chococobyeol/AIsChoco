@@ -216,6 +216,17 @@ async def reply_worker(
 
             pending_msgs = [m for m, _ in pending]
             pending_ids = [oid for _, oid in pending]
+            request_id = f"{int(time.time() * 1000)}-{pending_ids[0] if pending_ids else 0}"
+
+            def ai_info(message: str, *args):
+                ai_dialog_logger.info("rid=%s " + message, request_id, *args)
+
+            def tts_info(message: str, *args):
+                tts_pipeline_logger.info("rid=%s " + message, request_id, *args)
+
+            def tts_exc(message: str, *args):
+                tts_pipeline_logger.exception("rid=%s " + message, request_id, *args)
+
             tarot_enabled = os.environ.get("TAROT_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
             search_enabled = os.environ.get("WEB_SEARCH_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
             if not tarot_enabled:
@@ -233,6 +244,12 @@ async def reply_worker(
                     is_streamer = bool(channel_id and uid and str(uid) == str(channel_id))
                     is_requester = bool(requester_id and uid and str(uid) == str(requester_id))
                     if is_streamer or is_requester:
+                        ai_info(
+                            "tarot_cancel_by_user: user=%s user_id=%s message=%r",
+                            getattr(m, "user", "?"),
+                            uid,
+                            msg,
+                        )
                         overlay_state["tarot"] = None
                         tarot = None
                         break
@@ -252,7 +269,13 @@ async def reply_worker(
                     had_wait_request = tarot.get("had_wait_request") is True
                     overlay_state["tarot"] = None
                     if had_wait_request:
+                        ai_info(
+                            "assistant_reply: emotion=neutral action=tarot_wait_end response=%r tts_text=%r",
+                            TAROT_END_ANNOUNCE,
+                            TAROT_END_ANNOUNCE,
+                        )
                         try:
+                            tts_info("tts_synthesize_start: emotion=neutral text=%r", text_for_tts_numbers(TAROT_END_ANNOUNCE))
                             path = await asyncio.to_thread(
                                 _tts_synthesize_only,
                                 tts_service,
@@ -260,10 +283,14 @@ async def reply_worker(
                                 "neutral",
                                 "Korean",
                             )
+                            tts_info("tts_synthesize_done: path=%s", path)
                             is_speaking[0] = True
+                            tts_info("tts_play_start: path=%s", path)
                             await asyncio.to_thread(tts_service.play_file, path)
+                            tts_info("tts_play_done: path=%s", path)
                         except Exception as e:
                             logger.debug("타로 만료 안내 TTS 실패: %s", e)
+                            tts_exc("tts_play_error: %s", e)
                         finally:
                             is_speaking[0] = False
                     continue
@@ -274,20 +301,34 @@ async def reply_worker(
                     looks_tarot = "타로" in msg or "운세" in msg or "봐줘" in msg or "볼래" in msg
                     looks_again = ("또" in msg or "다시" in msg) and ("봐" in msg or "볼" in msg or "해" in msg)
                     if looks_tarot or looks_again:
+                        ai_info(
+                            "viewer_message: user=%s message=%r",
+                            getattr(m, "user", "?"),
+                            msg,
+                        )
                         overlay_state["tarot"]["had_wait_request"] = True  # await 전에 설정 (race 방지)
                         reply_text = await asyncio.to_thread(
                             groq_client.generate_tarot_wait_reply, msg
                         )
                         if not reply_text:
                             reply_text = "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
+                        ai_info(
+                            "assistant_reply: emotion=neutral action=tarot_wait_reply response=%r tts_text=%r",
+                            reply_text,
+                            reply_text,
+                        )
                         try:
+                            tts_info("tts_synthesize_start: emotion=neutral text=%r", text_for_tts_numbers(reply_text))
                             path = await asyncio.to_thread(
                                 _tts_synthesize_only, tts_service, text_for_tts_numbers(reply_text), "neutral", "Korean"
                             )
+                            tts_info("tts_synthesize_done: path=%s", path)
                             is_speaking[0] = True
+                            tts_info("tts_play_start: path=%s", path)
                             await asyncio.to_thread(tts_service.play_file, path)
-                        except Exception:
-                            pass
+                            tts_info("tts_play_done: path=%s", path)
+                        except Exception as e:
+                            tts_exc("tts_play_error: %s", e)
                         finally:
                             is_speaking[0] = False
                         overlay_state.setdefault("assistant_messages", []).append({
@@ -315,14 +356,24 @@ async def reply_worker(
                 if time.time() > deadline:
                     overlay_state["tarot"] = None
                     timeout_msg = "시간이 지나서 이번 타로는 마무리할게요."
+                    ai_info(
+                        "assistant_reply: emotion=neutral action=tarot_timeout response=%r tts_text=%r",
+                        timeout_msg,
+                        timeout_msg,
+                    )
                     try:
+                        tts_info("tts_synthesize_start: emotion=neutral text=%r", text_for_tts_numbers(timeout_msg))
                         path = await asyncio.to_thread(
                             _tts_synthesize_only, tts_service, text_for_tts_numbers(timeout_msg), "neutral", "Korean"
                         )
+                        tts_info("tts_synthesize_done: path=%s", path)
                         is_speaking[0] = True
+                        tts_info("tts_play_start: path=%s", path)
                         await asyncio.to_thread(tts_service.play_file, path)
+                        tts_info("tts_play_done: path=%s", path)
                     except Exception as e:
                         logger.debug("타로 타임아웃 TTS 실패: %s", e)
+                        tts_exc("tts_play_error: %s", e)
                     finally:
                         is_speaking[0] = False
                     continue
@@ -337,6 +388,11 @@ async def reply_worker(
                 ]
                 if requester_msgs:
                     combined = " ".join((getattr(m, "message", "") or "") for m in requester_msgs)
+                    ai_info(
+                        "viewer_message: user=%s message=%r",
+                        getattr(requester_msgs[0], "user", "?"),
+                        combined.strip(),
+                    )
                     spread_count = tarot.get("spread_count", 3)
                     context = chat_history.get_context_messages()
                     selection = await asyncio.to_thread(
@@ -347,18 +403,33 @@ async def reply_worker(
                     )
                     if selection.get("tarot_cancel"):
                         overlay_state["tarot"] = None
+                        sel_text = selection.get("tts_text") or selection["response"]
+                        ai_info(
+                            "assistant_reply: emotion=%s action=tarot_cancel response=%r tts_text=%r",
+                            selection.get("emotion") or "neutral",
+                            selection["response"],
+                            sel_text,
+                        )
                         try:
+                            tts_info(
+                                "tts_synthesize_start: emotion=%s text=%r",
+                                selection.get("emotion") or "neutral",
+                                text_for_tts_numbers(sel_text),
+                            )
                             path = await asyncio.to_thread(
                                 _tts_synthesize_only,
                                 tts_service,
-                                text_for_tts_numbers(selection.get("tts_text") or selection["response"]),
+                                text_for_tts_numbers(sel_text),
                                 selection.get("emotion") or "neutral",
                                 "Korean",
                             )
+                            tts_info("tts_synthesize_done: path=%s", path)
                             is_speaking[0] = True
+                            tts_info("tts_play_start: path=%s", path)
                             await asyncio.to_thread(tts_service.play_file, path)
-                        except Exception:
-                            pass
+                            tts_info("tts_play_done: path=%s", path)
+                        except Exception as e:
+                            tts_exc("tts_play_error: %s", e)
                         finally:
                             is_speaking[0] = False
                         continue
@@ -369,18 +440,33 @@ async def reply_worker(
                     logger.info("타로 선택 결과: numbers=%s, spread_count=%s", numbers, spread_count)
                     # 중복 안내 시 누적 번호 비우고 처음부터 다시 뽑게 함
                     if numbers is None and "중복" in (selection.get("response") or ""):
+                        sel_text = selection.get("tts_text") or selection["response"]
+                        ai_info(
+                            "assistant_reply: emotion=%s action=tarot_reask response=%r tts_text=%r",
+                            selection.get("emotion") or "neutral",
+                            selection["response"],
+                            sel_text,
+                        )
                         try:
+                            tts_info(
+                                "tts_synthesize_start: emotion=%s text=%r",
+                                selection.get("emotion") or "neutral",
+                                text_for_tts_numbers(sel_text),
+                            )
                             path = await asyncio.to_thread(
                                 _tts_synthesize_only,
                                 tts_service,
-                                text_for_tts_numbers(selection.get("tts_text") or selection["response"]),
+                                text_for_tts_numbers(sel_text),
                                 selection.get("emotion") or "neutral",
                                 "Korean",
                             )
+                            tts_info("tts_synthesize_done: path=%s", path)
                             is_speaking[0] = True
+                            tts_info("tts_play_start: path=%s", path)
                             await asyncio.to_thread(tts_service.play_file, path)
-                        except Exception:
-                            pass
+                            tts_info("tts_play_done: path=%s", path)
+                        except Exception as e:
+                            tts_exc("tts_play_error: %s", e)
                         finally:
                             is_speaking[0] = False
                         continue
@@ -393,7 +479,18 @@ async def reply_worker(
                             # 선택 확인 멘트가 있으면 먼저 TTS (예: "9, 3, 1번 선택하셨네요")
                             confirm_ment = (selection.get("response") or "").strip()
                             if confirm_ment and any(k in confirm_ment for k in ("선택", "고르셨", "확인")):
+                                ai_info(
+                                    "assistant_reply: emotion=%s action=tarot_confirm response=%r tts_text=%r",
+                                    selection.get("emotion") or "neutral",
+                                    confirm_ment,
+                                    confirm_ment,
+                                )
                                 try:
+                                    tts_info(
+                                        "tts_synthesize_start: emotion=%s text=%r",
+                                        selection.get("emotion") or "neutral",
+                                        text_for_tts_numbers(confirm_ment),
+                                    )
                                     path_ment = await asyncio.to_thread(
                                         _tts_synthesize_only,
                                         tts_service,
@@ -401,10 +498,13 @@ async def reply_worker(
                                         selection.get("emotion") or "neutral",
                                         "Korean",
                                     )
+                                    tts_info("tts_synthesize_done: path=%s", path_ment)
                                     is_speaking[0] = True
+                                    tts_info("tts_play_start: path=%s", path_ment)
                                     await asyncio.to_thread(tts_service.play_file, path_ment)
-                                except Exception:
-                                    pass
+                                    tts_info("tts_play_done: path=%s", path_ment)
+                                except Exception as e:
+                                    tts_exc("tts_play_error: %s", e)
                                 finally:
                                     is_speaking[0] = False
                             question = tarot.get("question") or ""
@@ -412,6 +512,12 @@ async def reply_worker(
                                 groq_client.get_tarot_interpretation, question, chosen
                             )
                             if result:
+                                interp_tts = result.get("tts_text") or result["interpretation"]
+                                ai_info(
+                                    "assistant_reply: emotion=neutral action=tarot_interpretation response=%r tts_text=%r",
+                                    result["interpretation"],
+                                    interp_tts,
+                                )
                                 overlay_state["tarot"] = {
                                     "visible": True,
                                     "phase": "revealed",
@@ -437,7 +543,7 @@ async def reply_worker(
                                             v["processed"] = True
                                             break
                                 try:
-                                    interp_tts = result.get("tts_text") or result["interpretation"]
+                                    tts_info("tts_synthesize_start: emotion=neutral text=%r", text_for_tts_numbers(interp_tts))
                                     path = await asyncio.to_thread(
                                         _tts_synthesize_only,
                                         tts_service,
@@ -445,12 +551,16 @@ async def reply_worker(
                                         "neutral",
                                         "Korean",
                                     )
+                                    tts_info("tts_synthesize_done: path=%s", path)
                                     is_speaking[0] = True
+                                    tts_info("tts_play_start: path=%s", path)
                                     await asyncio.to_thread(tts_service.play_file, path)
+                                    tts_info("tts_play_done: path=%s", path)
                                     if vts_client:
                                         await vts_client.set_emotion("neutral")
                                 except Exception as tts_e:
                                     logger.warning("타로 해석 TTS 실패: %s", tts_e)
+                                    tts_exc("tts_play_error: %s", tts_e)
                                 finally:
                                     is_speaking[0] = False
                                 # TTS 끝난 뒤 1분 후 자동 리셋 (오버레이에서 타이머 표시용)
@@ -460,6 +570,11 @@ async def reply_worker(
                             else:
                                 logger.warning("타로 해석 실패: get_tarot_interpretation 반환 없음 (Groq/JSON 오류)")
                                 fail_msg = "이번에는 해석을 불러오지 못했어요."
+                                ai_info(
+                                    "assistant_reply: emotion=neutral action=tarot_failed response=%r tts_text=%r",
+                                    fail_msg,
+                                    fail_msg,
+                                )
                                 overlay_state["tarot"] = {
                                     "visible": True,
                                     "phase": "failed",
@@ -467,6 +582,7 @@ async def reply_worker(
                                     "failed_until_ts": time.time() + 5,
                                 }
                                 try:
+                                    tts_info("tts_synthesize_start: emotion=neutral text=%r", fail_msg)
                                     path = await asyncio.to_thread(
                                         _tts_synthesize_only,
                                         tts_service,
@@ -474,10 +590,13 @@ async def reply_worker(
                                         "neutral",
                                         "Korean",
                                     )
+                                    tts_info("tts_synthesize_done: path=%s", path)
                                     is_speaking[0] = True
+                                    tts_info("tts_play_start: path=%s", path)
                                     await asyncio.to_thread(tts_service.play_file, path)
-                                except Exception:
-                                    pass
+                                    tts_info("tts_play_done: path=%s", path)
+                                except Exception as e:
+                                    tts_exc("tts_play_error: %s", e)
                                 finally:
                                     is_speaking[0] = False
                         else:
@@ -488,6 +607,12 @@ async def reply_worker(
                     reask_tts = (selection.get("tts_text") or reask_text).strip() or reask_text
                     print(f"  → [타로 재요청] {reask_text}")
                     logger.info("타로 재요청 멘트: %s", reask_text[:100])
+                    ai_info(
+                        "assistant_reply: emotion=%s action=tarot_reask response=%r tts_text=%r",
+                        selection.get("emotion") or "neutral",
+                        reask_text,
+                        reask_tts,
+                    )
                     overlay_state.setdefault("assistant_messages", []).append({
                         "message": reask_text,
                         "ts": time.time(),
@@ -502,6 +627,11 @@ async def reply_worker(
                                     v["processed"] = True
                                     break
                     try:
+                        tts_info(
+                            "tts_synthesize_start: emotion=%s text=%r",
+                            selection.get("emotion") or "neutral",
+                            text_for_tts_numbers(reask_tts),
+                        )
                         path = await asyncio.to_thread(
                             _tts_synthesize_only,
                             tts_service,
@@ -509,10 +639,13 @@ async def reply_worker(
                             selection.get("emotion") or "neutral",
                             "Korean",
                         )
+                        tts_info("tts_synthesize_done: path=%s", path)
                         is_speaking[0] = True
+                        tts_info("tts_play_start: path=%s", path)
                         await asyncio.to_thread(tts_service.play_file, path)
-                    except Exception:
-                        pass
+                        tts_info("tts_play_done: path=%s", path)
+                    except Exception as e:
+                        tts_exc("tts_play_error: %s", e)
                     finally:
                         is_speaking[0] = False
                     continue
@@ -520,7 +653,7 @@ async def reply_worker(
             # ----- 일반 채팅 처리
             for m in pending_msgs:
                 print(f"  [대기] {m.user}: {m.message}")
-                ai_dialog_logger.info(
+                ai_info(
                     "viewer_message: user=%s message=%r",
                     (m.user or "?"),
                     (m.message or ""),
@@ -547,7 +680,7 @@ async def reply_worker(
                     continue
                 chat_history.add_assistant_message(ai_response.response)
                 print(f"  → [감정:{ai_response.emotion}] {ai_response.response}")
-                ai_dialog_logger.info(
+                ai_info(
                     "assistant_reply: emotion=%s action=%s response=%r tts_text=%r",
                     ai_response.emotion,
                     getattr(ai_response, "action", None),
@@ -604,7 +737,7 @@ async def reply_worker(
                 path = None
                 if tts_input.strip() and tts_input != ".":
                     try:
-                        tts_pipeline_logger.info(
+                        tts_info(
                             "tts_synthesize_start: emotion=%s text=%r",
                             ai_response.emotion,
                             tts_input,
@@ -616,16 +749,16 @@ async def reply_worker(
                             ai_response.emotion,
                             "Korean",
                         )
-                        tts_pipeline_logger.info(
+                        tts_info(
                             "tts_synthesize_done: path=%s",
                             path,
                         )
                     except Exception as tts_e:
                         logger.exception("TTS 오류: %s", tts_e)
-                        tts_pipeline_logger.exception("tts_synthesize_error: %s", tts_e)
+                        tts_exc("tts_synthesize_error: %s", tts_e)
                         path = None
                 else:
-                    tts_pipeline_logger.info(
+                    tts_info(
                         "tts_skipped: empty_or_placeholder_input response=%r",
                         ai_response.response or "",
                     )
@@ -651,7 +784,7 @@ async def reply_worker(
                 if path:
                     try:
                         is_speaking[0] = True
-                        tts_pipeline_logger.info("tts_play_start: path=%s", path)
+                        tts_info("tts_play_start: path=%s", path)
                         play_task = asyncio.create_task(
                             asyncio.to_thread(tts_service.play_file, path)
                         )
@@ -661,10 +794,10 @@ async def reply_worker(
                                 vts_client, start_x=0.8, start_y=-0.9, duration_sec=0.4
                             )
                         await play_task
-                        tts_pipeline_logger.info("tts_play_done: path=%s", path)
+                        tts_info("tts_play_done: path=%s", path)
                     except Exception as play_e:
                         logger.warning("재생 실패: %s", play_e)
-                        tts_pipeline_logger.exception("tts_play_error: %s", play_e)
+                        tts_exc("tts_play_error: %s", play_e)
                     finally:
                         is_speaking[0] = False
             chat_history.flush_summary(groq_client)
