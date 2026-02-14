@@ -141,7 +141,10 @@ async def idle_worker(
             next_leg = now + leg_interval + random.uniform(-4, 4)
 
 
-async def tarot_timeout_worker():
+TAROT_END_ANNOUNCE = "이번 타로 끝났어요. 아까 타로 요청하셨던 분 다시 요청해 주세요."
+
+
+async def tarot_timeout_worker(tts_service: Optional[TTSService] = None):
     """revealed 1분 만료 / failed 표시 만료 시 주기적으로 타로 상태 초기화 (메인 루프는 queue.get 대기라 채팅 없으면 체크 안 함)."""
     while True:
         try:
@@ -160,7 +163,20 @@ async def tarot_timeout_worker():
         elif phase == "revealed":
             reset_at = tarot.get("auto_reset_at_ts") or 0
             if reset_at and now >= reset_at:
+                had_wait_request = tarot.get("had_wait_request") is True
                 overlay_state["tarot"] = None
+                if had_wait_request and tts_service:
+                    try:
+                        path = await asyncio.to_thread(
+                            _tts_synthesize_only,
+                            tts_service,
+                            text_for_tts_numbers(TAROT_END_ANNOUNCE),
+                            "neutral",
+                            "Korean",
+                        )
+                        await asyncio.to_thread(tts_service.play_file, path)
+                    except Exception as e:
+                        logger.debug("타로 만료 안내 TTS 실패: %s", e)
 
 
 async def reply_worker(
@@ -230,19 +246,36 @@ async def reply_worker(
                 if time.time() >= until:
                     overlay_state["tarot"] = None
                     continue
-            # ----- 타로 해석 공개 후 1분 지나면 자동 리셋
+            # ----- 타로 해석 공개 후 1분 지나면 자동 리셋 (중간에 타로 요청 있었을 때만 안내 멘트)
             if tarot and tarot.get("phase") == "revealed":
                 reset_at = tarot.get("auto_reset_at_ts") or 0
                 if reset_at and time.time() >= reset_at:
+                    had_wait_request = tarot.get("had_wait_request") is True
                     overlay_state["tarot"] = None
+                    if had_wait_request:
+                        try:
+                            path = await asyncio.to_thread(
+                                _tts_synthesize_only,
+                                tts_service,
+                                text_for_tts_numbers(TAROT_END_ANNOUNCE),
+                                "neutral",
+                                "Korean",
+                            )
+                            is_speaking[0] = True
+                            await asyncio.to_thread(tts_service.play_file, path)
+                        except Exception as e:
+                            logger.debug("타로 만료 안내 TTS 실패: %s", e)
+                        finally:
+                            is_speaking[0] = False
                     continue
                 # 60초 대기 중 아무나 타로/봐줘 요청하면 "창 닫힐 때까지 기다려 주세요" 멘트만 (AI 처리)
                 did_wait_ment = False
                 for m, oid in zip(pending_msgs, pending_ids):
                     msg = (getattr(m, "message", "") or "").strip()
-                    looks_tarot = "타로" in msg or "봐줘" in msg or "볼래" in msg
+                    looks_tarot = "타로" in msg or "운세" in msg or "봐줘" in msg or "볼래" in msg
                     looks_again = ("또" in msg or "다시" in msg) and ("봐" in msg or "볼" in msg or "해" in msg)
                     if looks_tarot or looks_again:
+                        overlay_state["tarot"]["had_wait_request"] = True  # await 전에 설정 (race 방지)
                         reply_text = await asyncio.to_thread(
                             groq_client.generate_tarot_wait_reply, msg
                         )
@@ -655,7 +688,7 @@ async def main():
             queue, groq_client, tts_service, vts_client, chat_history, is_speaking, channel_id
         )
     )
-    tarot_timeout_task = asyncio.create_task(tarot_timeout_worker())
+    tarot_timeout_task = asyncio.create_task(tarot_timeout_worker(tts_service))
     idle_task: Optional[asyncio.Task] = None
     if vts_client:
         idle_task = asyncio.create_task(idle_worker(vts_client, is_speaking))
