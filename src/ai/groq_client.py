@@ -60,12 +60,16 @@ def _extract_failed_generation(err: Exception) -> str:
     try:
         body = getattr(err, "body", None)
         if isinstance(body, dict):
-            return (body.get("error") or {}).get("failed_generation") or ""
+            fg = (body.get("error") or {}).get("failed_generation") or ""
+            if isinstance(fg, str) and fg.strip():
+                return fg
         if hasattr(err, "response") and err.response is not None:
             resp = getattr(err, "response", None)
             if hasattr(resp, "json"):
                 data = resp.json()
-                return (data.get("error") or {}).get("failed_generation") or ""
+                fg = (data.get("error") or {}).get("failed_generation") or ""
+                if isinstance(fg, str) and fg.strip():
+                    return fg
     except Exception:
         pass
 
