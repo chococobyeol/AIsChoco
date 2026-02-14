@@ -310,6 +310,16 @@ class ChzzkSocketIOClient(ChatClient):
                 user_id=data.get("senderChannelId"),
                 user_badge=str(data.get("userRoleCode", ""))
             )
+            preview = (content or "").replace("\n", " ").strip()
+            if len(preview) > 80:
+                preview = preview[:80] + "..."
+            logger.debug(
+                "[%s] 채팅 수신: user=%s len=%d msg=%r",
+                self.platform_name,
+                nickname or "?",
+                len(content or ""),
+                preview,
+            )
             
             if self.on_message:
                 cb = self.on_message(message)

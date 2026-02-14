@@ -10,6 +10,7 @@ import logging
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 import httpx
 
@@ -76,7 +77,7 @@ class ChzzkAuth:
             "state": state
         }
         
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        query_string = urlencode(params)
         return f"{self.AUTH_BASE_URL}/account-interlock?{query_string}"
     
     async def exchange_code_for_token(

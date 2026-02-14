@@ -69,6 +69,77 @@ def _extract_failed_generation(err: Exception) -> str:
         pass
     return ""
 
+
+def _first_choice_message(response: Any, where: str):
+    """OpenAI 응답에서 첫 message를 안전하게 추출."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        logger.warning("%s: response.choices가 비어 있습니다.", where)
+        return None
+    msg = getattr(choices[0], "message", None)
+    if msg is None:
+        logger.warning("%s: response.choices[0].message가 없습니다.", where)
+    return msg
+
+
+def _first_choice_content(response: Any, where: str) -> str:
+    """OpenAI 응답 첫 message.content를 안전하게 문자열로 반환."""
+    msg = _first_choice_message(response, where)
+    if msg is None:
+        return ""
+    content = getattr(msg, "content", "")
+    if content is None:
+        return ""
+    return str(content)
+
+
+def _parse_int_list(raw_value: Any) -> List[int]:
+    """list/문자열(세미콜론, 콤마, JSON 배열) 입력을 int 리스트로 변환."""
+    if isinstance(raw_value, list):
+        out: List[int] = []
+        for v in raw_value:
+            try:
+                out.append(int(v))
+            except (TypeError, ValueError):
+                continue
+        return out
+    if not isinstance(raw_value, str):
+        return []
+
+    s = raw_value.strip()
+    if not s:
+        return []
+    if ";" in s:
+        parts = [p.strip() for p in s.split(";") if p.strip()]
+    elif "," in s:
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+    elif s.startswith("[") and s.endswith("]"):
+        try:
+            return _parse_int_list(json.loads(s))
+        except json.JSONDecodeError:
+            return []
+    else:
+        parts = [s]
+
+    out: List[int] = []
+    for p in parts:
+        try:
+            out.append(int(p))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _sanitize_user_text(value: Any, max_len: int = 1000) -> str:
+    """프롬프트에 삽입하기 전 사용자 입력 최소 정제."""
+    s = str(value or "")
+    s = s.replace("\r", " ").replace("\0", " ")
+    s = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if len(s) > max_len:
+        s = s[:max_len]
+    return s
+
 # config/character.txt 가 있으면 시스템 프롬프트 앞에 붙임
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
@@ -80,7 +151,12 @@ def _load_character_prompt(character_path: Optional[Path] = None) -> str:
     if not p.exists():
         return ""
     try:
-        return p.read_text(encoding="utf-8").strip()
+        text = p.read_text(encoding="utf-8").replace("\0", "").strip()
+        # character 프롬프트 과도 확장을 막기 위한 상한
+        if len(text) > 12000:
+            logger.warning("캐릭터 프롬프트가 너무 깁니다(%d자). 12000자로 잘라서 사용합니다.", len(text))
+            text = text[:12000]
+        return text
     except Exception as e:
         logger.warning("캐릭터 파일 로드 실패 %s: %s", p, e)
         return ""
@@ -169,6 +245,12 @@ class GroqClient:
             api_key=self.api_key,
             base_url=GROQ_BASE_URL,
         )
+        logger.info(
+            "GroqClient 초기화 완료: model=%s, max_tokens=%s, character_prompt=%s",
+            self.model,
+            self.max_tokens,
+            bool(self._character_prompt),
+        )
 
     def _system_prompt(self, base: str) -> str:
         """캐릭터 설정이 있으면 앞에 붙여서 반환."""
@@ -193,12 +275,19 @@ class GroqClient:
         Returns:
             AIResponse(response, emotion, ...)
         """
-        content = user_message.strip()
+        content = _sanitize_user_text(user_message, max_len=1000)
         if not content:
             return AIResponse(response="", emotion="neutral", confidence=0.0)
 
         if user_name:
-            content = f"{user_name}: {content}"
+            safe_name = _sanitize_user_text(user_name, max_len=40).replace(":", " ")
+            content = f"{safe_name}: {content}"
+        logger.debug(
+            "reply 요청: user=%s, msg_len=%d, context_count=%d",
+            (user_name or "?"),
+            len(content),
+            len(context_messages or []),
+        )
 
         messages = [{"role": "system", "content": self._system_prompt(SYSTEM_PROMPT)}]
         if context_messages:
@@ -213,7 +302,7 @@ class GroqClient:
                 max_tokens=self.max_tokens,
                 response_format={"type": "json_object"},
             )
-            raw = response.choices[0].message.content
+            raw = _first_choice_content(response, "reply")
             elapsed = time.perf_counter() - start
         except Exception as e:
             logger.exception("Groq API 호출 실패: %s", e)
@@ -266,7 +355,7 @@ class GroqClient:
                 ],
                 max_tokens=512,
             )
-            raw = (response.choices[0].message.content or "").strip()
+            raw = _first_choice_content(response, "summarize").strip()
             return raw
         except Exception as e:
             logger.warning("요약 생성 실패: %s", e)
@@ -294,7 +383,7 @@ class GroqClient:
                 max_tokens=128,
                 response_format={"type": "json_object"},
             )
-            raw = (response.choices[0].message.content or "").strip()
+            raw = _first_choice_content(response, "generate_tarot_wait_reply").strip()
             data = json.loads(raw)
             text = (data.get("response") or "").strip()
             return text or "아직 이번 타로가 끝나지 않았어요. 창이 닫힐 때까지 잠시만 기다려 주세요."
@@ -312,7 +401,9 @@ class GroqClient:
                 tools=[SEARCH_WEB_TOOL],
                 tool_choice="auto",
             )
-            msg = response.choices[0].message
+            msg = _first_choice_message(response, "_reply_batch_with_search")
+            if msg is None:
+                return None
             if not getattr(msg, "tool_calls", None):
                 content = (msg.content or "").strip()
                 if not content:
@@ -336,7 +427,7 @@ class GroqClient:
                         max_tokens=1024,
                         response_format={"type": "json_object"},
                     )
-                    out = (resp2.choices[0].message.content or "").strip()
+                    out = _first_choice_content(resp2, "_reply_batch_with_search.reformat").strip()
                     if out:
                         return out
                 except Exception as e:
@@ -373,10 +464,20 @@ class GroqClient:
         """
         if not pending:
             return []
+        logger.debug(
+            "reply_batch 요청: pending=%d, context_count=%d, tarot_phase=%s, tarot_enabled=%s, search_enabled=%s",
+            len(pending),
+            len(context_messages or []),
+            (tarot_state or {}).get("phase"),
+            tarot_enabled,
+            search_enabled,
+        )
         lines = []
         for m in pending:
             user = getattr(m, "user", None) or (m.get("user") if isinstance(m, dict) else None)
+            user = _sanitize_user_text(user, max_len=40)
             msg = getattr(m, "message", None) or (m.get("message") if isinstance(m, dict) else None) or ""
+            msg = _sanitize_user_text(msg, max_len=500)
             if (msg or "").strip():
                 lines.append(f"{user or '?'}: {msg}")
         content = "\n".join(lines)
@@ -419,7 +520,7 @@ class GroqClient:
                     max_tokens=1024,
                     response_format={"type": "json_object"},
                 )
-                raw = response.choices[0].message.content
+                raw = _first_choice_content(response, "reply_batch")
         except Exception as e:
             err_msg = str(e).lower()
             if "429" in err_msg or "rate_limit" in err_msg:
@@ -453,7 +554,7 @@ class GroqClient:
                         max_tokens=1024,
                         response_format={"type": "json_object"},
                     )
-                    raw = response.choices[0].message.content
+                    raw = _first_choice_content(response, "reply_batch.retry_json_validate_failed")
                 except Exception as retry_e:
                     logger.exception("Groq batch 피드백 재시도 실패: %s", retry_e)
                     return []
@@ -544,11 +645,13 @@ class GroqClient:
                     confidence=1.0,
                     processing_time=elapsed,
                 ))
+            logger.info("reply_batch 완료: replies=%d, elapsed=%.3fs", len(out), elapsed)
             return out
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("Groq batch JSON 파싱 실패: %s", e)
             # 검색 등으로 평문만 온 경우 그대로 한 개 답변으로 반환
             if raw and (raw or "").strip():
+                logger.info("reply_batch 완료(plain fallback): replies=1, elapsed=%.3fs", time.perf_counter() - start)
                 return [AIResponse(
                     response=(raw or "").strip(),
                     emotion="neutral",
@@ -570,7 +673,8 @@ class GroqClient:
             for c in cards
         )
 
-        user_content = f"질문: {question}\n뽑은 카드: {cards_desc}\n상황에 맞는 visual_data를 포함해 JSON으로 답하세요."
+        safe_question = _sanitize_user_text(question, max_len=500)
+        user_content = f"질문: {safe_question}\n뽑은 카드: {cards_desc}\n상황에 맞는 visual_data를 포함해 JSON으로 답하세요."
 
         messages = [
             {"role": "system", "content": self._system_prompt(TAROT_INTERPRET_SYSTEM)},
@@ -585,7 +689,7 @@ class GroqClient:
                 max_tokens=2048,
                 response_format={"type": "json_object"},
             )
-            raw = (response.choices[0].message.content or "").strip()
+            raw = _first_choice_content(response, "get_tarot_interpretation").strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[-1].replace("```", "").strip()
             data = json.loads(raw)
@@ -657,20 +761,25 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
         user_message: str,
         spread_count: int = 3,
         context_messages: Optional[List[dict]] = None,
-        pending_numbers: Optional[List[int]] = None,
     ) -> dict:
         """
         타로 번호 선택 단계에서 시청자 말을 AI로 해석. 키워드 없이 자연어 처리.
-        pending_numbers: 이전 턴에 이미 고른 번호(예: [19,22]). 있으면 이번 말과 합쳐서 N개가 되면 반환.
         Returns: {"response": str, "emotion": str, "tarot_numbers": list|None, "tarot_cancel": bool}
         """
+        try:
+            spread_count = int(spread_count)
+        except (TypeError, ValueError):
+            spread_count = 3
+        if spread_count < 1 or spread_count > 5:
+            spread_count = 3
+
         out: dict = {
             "response": "1번부터 78번까지 번호 %s개만 골라주세요." % spread_count,
             "emotion": "neutral",
             "tarot_numbers": None,
             "tarot_cancel": False,
         }
-        msg = (user_message or "").strip()
+        msg = _sanitize_user_text(user_message, max_len=500)
         if not msg:
             return out
         user_content = f"요청한 개수 N: {spread_count}\n시청자 말: {msg}"
@@ -689,7 +798,7 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                 max_tokens=max_tok,
                 response_format={"type": "json_object"},
             )
-            raw = (response.choices[0].message.content or "").strip()
+            raw = _first_choice_content(response, "process_tarot_selection").strip()
         except Exception as e:
             err_msg = str(e).lower()
             if "400" in err_msg and "json_validate_failed" in err_msg:
@@ -705,7 +814,7 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                         max_tokens=max_tok,
                         response_format={"type": "json_object"},
                     )
-                    raw = (response.choices[0].message.content or "").strip()
+                    raw = _first_choice_content(response, "process_tarot_selection.retry_json_validate_failed").strip()
                 except Exception as retry_e:
                     logger.warning("타로 선택 피드백 재시도 실패: %s", retry_e)
                     raw = None
@@ -724,7 +833,7 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                     messages=[{"role": "system", "content": "한 문장만 출력하세요. JSON·설명 추가 없이."}, {"role": "user", "content": explain_prompt}],
                     max_tokens=256,
                 )
-                fallback_text = (resp.choices[0].message.content or "").strip().strip("'\"")
+                fallback_text = _first_choice_content(resp, "process_tarot_selection.fallback_sentence").strip().strip("'\"")
                 # 사용자 말 그대로 돌려받거나 짧으면 기본 재요청 문구 사용
                 if fallback_text and len(fallback_text) > 20 and fallback_text.strip() != msg.strip():
                     if msg.strip() not in fallback_text or len(fallback_text) > len(msg) + 15:
@@ -746,39 +855,30 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
             if data.get("tarot_cancel") is True:
                 out["tarot_cancel"] = True
                 return out
-            nums = data.get("tarot_numbers") or data.get("tarotNumbers")
-            # 세미콜론(;) 구분 문자열 우선 (AI가 숫자 붙여 보내는 문제 방지)
-            if isinstance(nums, str) and ";" in nums:
-                try:
-                    nums = [int(x.strip()) for x in nums.split(";") if x.strip()]
-                except ValueError:
-                    nums = []
-            elif not isinstance(nums, list) and isinstance(nums, str):
-                nums = [x.strip() for x in nums.replace("，", ",").split(",") if x.strip()]
+            nums = _parse_int_list(data.get("tarot_numbers") or data.get("tarotNumbers"))
             has_duplicate = False
-            if isinstance(nums, list):
-                clean: List[int] = []
-                for x in nums:
-                    try:
-                        if isinstance(x, float) and x != int(x):
-                            continue
-                        n = int(x) if not isinstance(x, int) else x
-                        if 1 <= n <= 78:
-                            if n not in clean:
-                                clean.append(n)
-                            else:
-                                has_duplicate = True
-                    except (TypeError, ValueError):
+            clean: List[int] = []
+            for x in nums:
+                try:
+                    if isinstance(x, float) and x != int(x):
                         continue
-                clean = clean[:spread_count]
-                if has_duplicate:
-                    out["tarot_numbers"] = None
-                    out["response"] = f"중복된 번호가 있어요. 처음부터 다시 {spread_count}개 골라주세요."
-                    out["tts_text"] = out["response"]
-                    logger.info("타로 번호 중복 감지 → 처음부터 재선택 요청")
-                elif len(clean) >= spread_count:
-                    out["tarot_numbers"] = clean[:spread_count]
-                    logger.info("타로 번호 인식: %s", out["tarot_numbers"])
+                    n = int(x) if not isinstance(x, int) else x
+                    if 1 <= n <= 78:
+                        if n not in clean:
+                            clean.append(n)
+                        else:
+                            has_duplicate = True
+                except (TypeError, ValueError):
+                    continue
+            clean = clean[:spread_count]
+            if has_duplicate:
+                out["tarot_numbers"] = None
+                out["response"] = f"중복된 번호가 있어요. 처음부터 다시 {spread_count}개 골라주세요."
+                out["tts_text"] = out["response"]
+                logger.info("타로 번호 중복 감지 → 처음부터 재선택 요청")
+            elif len(clean) >= spread_count:
+                out["tarot_numbers"] = clean[:spread_count]
+                logger.info("타로 번호 인식: %s", out["tarot_numbers"])
             # AI가 tarot_numbers를 빼먹었고 response가 확인 멘트면 → 이전 응답 + 시청자 말 주고 "tarot_numbers 채워서 JSON 다시 출력" 요청
             if out["tarot_numbers"] is None and out.get("response") and ("번 선택" in out["response"] or "번 골라" in out["response"]):
                 try:
@@ -797,19 +897,15 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                         max_tokens=max_tok,
                         response_format={"type": "json_object"},
                     )
-                    retry_raw = (retry_resp.choices[0].message.content or "").strip()
+                    retry_raw = _first_choice_content(retry_resp, "process_tarot_selection.retry_fill_tarot_numbers").strip()
                     if retry_raw:
                         retry_data = json.loads(retry_raw)
-                        nums = retry_data.get("tarot_numbers") or retry_data.get("tarotNumbers")
-                        if isinstance(nums, str):
-                            try:
-                                nums = json.loads(nums)
-                            except json.JSONDecodeError:
-                                nums = None
-                        if isinstance(nums, list) and len(nums) >= spread_count:
-                            out["tarot_numbers"] = [int(x) if not isinstance(x, int) else x for x in nums[:spread_count]]
+                        nums = _parse_int_list(retry_data.get("tarot_numbers") or retry_data.get("tarotNumbers"))
+                        retry_clean = [n for n in nums if 1 <= int(n) <= 78]
+                        if len(retry_clean) >= spread_count:
+                            out["tarot_numbers"] = [int(x) for x in retry_clean[:spread_count]]
                             logger.info("타로 번호 AI 재요청으로 채움: %s", out["tarot_numbers"])
-                        elif isinstance(nums, list) and len(nums) > 0:
+                        elif len(retry_clean) > 0:
                             # [3419]처럼 잘못 온 경우 → AI에게 그대로 보여주고 "N개 별도 번호로 다시" 한 번 더 요청
                             wrong_json = json.dumps(retry_data, ensure_ascii=False)
                             fix_resp = self._client.chat.completions.create(
@@ -821,12 +917,13 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                                 max_tokens=max_tok,
                                 response_format={"type": "json_object"},
                             )
-                            fix_raw = (fix_resp.choices[0].message.content or "").strip()
+                            fix_raw = _first_choice_content(fix_resp, "process_tarot_selection.retry_fix_tarot_numbers").strip()
                             if fix_raw:
                                 fix_data = json.loads(fix_raw)
-                                fix_nums = fix_data.get("tarot_numbers") or fix_data.get("tarotNumbers")
-                                if isinstance(fix_nums, list) and len(fix_nums) >= spread_count:
-                                    out["tarot_numbers"] = [int(x) if not isinstance(x, int) else x for x in fix_nums[:spread_count]]
+                                fix_nums = _parse_int_list(fix_data.get("tarot_numbers") or fix_data.get("tarotNumbers"))
+                                fix_clean = [n for n in fix_nums if 1 <= int(n) <= 78]
+                                if len(fix_clean) >= spread_count:
+                                    out["tarot_numbers"] = [int(x) for x in fix_clean[:spread_count]]
                                     logger.info("타로 번호 AI 수정 요청으로 채움: %s", out["tarot_numbers"])
                                 else:
                                     logger.warning("타로 수정 요청 후에도 tarot_numbers 부족: %s", fix_raw[:200])
@@ -849,7 +946,7 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                     messages=[{"role": "system", "content": "한 문장만 출력하세요. JSON·설명 추가 없이."}, {"role": "user", "content": explain_prompt}],
                     max_tokens=256,
                 )
-                fallback_text = (resp.choices[0].message.content or "").strip().strip("'\"")
+                fallback_text = _first_choice_content(resp, "process_tarot_selection.json_parse_fallback_sentence").strip().strip("'\"")
                 if fallback_text and len(fallback_text) > 20 and fallback_text.strip() != msg.strip():
                     if msg.strip() not in fallback_text or len(fallback_text) > len(msg) + 15:
                         out["response"] = fallback_text
@@ -933,11 +1030,19 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
         spread_count: int = 3,
     ) -> Optional[List[int]]:
         """사용자 멘트(123, 일 십삼 오십 등)에서 1~78 번호를 AI가 추출. 실패 시 단순 숫자 파싱 폴백."""
-        if not (user_message or "").strip():
+        try:
+            spread_count = int(spread_count)
+        except (TypeError, ValueError):
+            spread_count = 3
+        if spread_count < 1 or spread_count > 5:
+            spread_count = 3
+
+        safe_user_message = _sanitize_user_text(user_message, max_len=500)
+        if not safe_user_message:
             return None
         messages = [
             {"role": "system", "content": self.TAROT_NUMBERS_SYSTEM},
-            {"role": "user", "content": f"사용자 말: {user_message.strip()}\n\n1~78 번호 {spread_count}개만 JSON으로."},
+            {"role": "user", "content": f"사용자 말: {safe_user_message}\n\n1~78 번호 {spread_count}개만 JSON으로."},
         ]
         try:
             response = self._client.chat.completions.create(
@@ -946,7 +1051,7 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                 max_tokens=128,
                 response_format={"type": "json_object"},
             )
-            raw = (response.choices[0].message.content or "").strip()
+            raw = _first_choice_content(response, "parse_tarot_card_numbers").strip()
         except Exception as e:
             err_msg = str(e).lower()
             if "400" in err_msg and "json_validate_failed" in err_msg:
@@ -962,18 +1067,18 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                         max_tokens=128,
                         response_format={"type": "json_object"},
                     )
-                    raw = (response.choices[0].message.content or "").strip()
+                    raw = _first_choice_content(response, "parse_tarot_card_numbers.retry_json_validate_failed").strip()
                 except Exception as retry_e:
                     logger.warning("타로 번호 추출 피드백 재시도 실패: %s", retry_e)
-                    return self._parse_tarot_numbers_fallback(user_message, spread_count)
+                    return self._parse_tarot_numbers_fallback(safe_user_message, spread_count)
             else:
                 logger.warning("타로 번호 추출 Groq 실패: %s", e)
-                return self._parse_tarot_numbers_fallback(user_message, spread_count)
+                return self._parse_tarot_numbers_fallback(safe_user_message, spread_count)
         try:
             data = json.loads(raw)
             nums = data.get("numbers")
             if not isinstance(nums, list):
-                return self._parse_tarot_numbers_fallback(user_message, spread_count)
+                return self._parse_tarot_numbers_fallback(safe_user_message, spread_count)
             out = []
             for x in nums[:spread_count]:
                 try:
@@ -984,6 +1089,6 @@ JSON: {"response": "...", "tts_text": "...", "emotion": "감정키", "tarot_numb
                     continue
             if len(out) >= spread_count:
                 return out[:spread_count]
-            return self._parse_tarot_numbers_fallback(user_message, spread_count)
+            return self._parse_tarot_numbers_fallback(safe_user_message, spread_count)
         except (json.JSONDecodeError, TypeError):
-            return self._parse_tarot_numbers_fallback(user_message, spread_count)
+            return self._parse_tarot_numbers_fallback(safe_user_message, spread_count)

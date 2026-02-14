@@ -40,6 +40,8 @@ def run_web_search(query: str) -> str:
         return "검색 결과가 없습니다."
     lines = []
     for i, r in enumerate(results[:MAX_RESULTS], 1):
+        if not isinstance(r, dict):
+            continue
         title = (r.get("title") or "").strip()
         body = (r.get("body") or r.get("snippet") or "").strip()
         if len(body) > SNIPPET_LEN:

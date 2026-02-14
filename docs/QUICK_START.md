@@ -56,7 +56,17 @@
 
 ## 2. 환경 변수 설정
 
-프로젝트 루트에 `.env` 파일을 생성하고 다음 내용을 입력하세요:
+프로젝트 루트에서 `.env.example`을 복사해 `.env`를 만들고 값을 채우세요.
+
+```bash
+# macOS / Linux
+cp .env.example .env
+
+# Windows PowerShell
+Copy-Item .env.example .env
+```
+
+기본 템플릿:
 
 ```bash
 # 치지직 API 인증 정보
@@ -79,6 +89,12 @@ GROQ_API_KEY=your-groq-api-key-here
 
 # (선택) Colab TTS 사용 시
 # TTS_REMOTE_URL=https://xxxx.ngrok.io
+
+# (선택) 로그 설정
+# ENGINEIO_LOG_LEVEL=ERROR      # 기본 WARNING, engineio/client 로그 줄이기
+# LOG_CONSOLE_LEVEL=WARNING     # 콘솔 출력 레벨
+# LOG_MAX_MB=10                 # 파일당 최대 크기(MB)
+# LOG_BACKUP_COUNT=5            # 로그 파일 보관 개수
 ```
 
 ⚠️ **보안 주의사항**:
@@ -119,6 +135,11 @@ https://chzzk.naver.com/live/{CHANNEL_ID}
 python examples/chzzk_chat_example.py
 ```
 
+실행 후 프로젝트 루트에 `logs/` 폴더가 생성되고 아래 파일이 저장됩니다:
+- `logs/app.log` (통합)
+- `logs/error.log` (에러 전용)
+- `logs/chat.log`, `logs/ai.log`, `logs/tts.log`, `logs/vtuber.log` (카테고리별)
+
 ### 5.2 전체 시스템 실행 (채팅 + Groq + TTS + VTS)
 ```bash
 python examples/chzzk_groq_example.py
@@ -128,6 +149,7 @@ python examples/chzzk_groq_example.py
 
 - [PRD.md](../PRD.md) - 상세한 제품 요구사항 문서
 - [docs/CHZZK_API_RESEARCH.md](CHZZK_API_RESEARCH.md) - 치지직 API 상세 가이드
+- [docs/LOGGING.md](LOGGING.md) - 로그 파일 구조/레벨/회전 설정
 
 ## 문제 해결
 

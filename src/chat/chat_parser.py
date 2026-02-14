@@ -67,7 +67,7 @@ class ChatParser:
                 try:
                     n = float(ts)
                     ts = datetime.fromtimestamp(n / 1000 if n > 1e12 else n)
-                except (TypeError, OSError):
+                except (TypeError, ValueError, OSError):
                     ts = datetime.now()
             message = ChatMessage(
                 user=raw_message.get("user", ""),

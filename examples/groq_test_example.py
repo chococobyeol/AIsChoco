@@ -37,7 +37,11 @@ def main():
         messages=[{"role": "user", "content": "한 줄로 짧게 인사해줘."}],
         max_tokens=64,
     )
-    reply = response.choices[0].message.content
+    choices = getattr(response, "choices", None) or []
+    if not choices or getattr(choices[0], "message", None) is None:
+        print("응답이 비어 있습니다.")
+        sys.exit(1)
+    reply = (choices[0].message.content or "").strip()
     print("응답:", reply)
     print("Groq API 키 정상 동작합니다.")
 

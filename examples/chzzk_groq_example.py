@@ -32,6 +32,7 @@ from src.chat import ChatClientFactory, ChatMessage
 from src.ai import GroqClient, AIResponse, ChatHistory
 from src.tts import TTSService, text_for_tts_numbers
 from src.vtuber import VTSClient
+from src.utils import setup_logging
 from src.overlay.state import (
     overlay_state,
     MAX_VIEWER_MESSAGES,
@@ -41,12 +42,10 @@ from src.overlay.state import (
 from src.overlay.tarot_deck import build_deck
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+LOG_DIR = setup_logging()
 logger = logging.getLogger(__name__)
+ai_dialog_logger = logging.getLogger("src.ai.dialogue")
+tts_pipeline_logger = logging.getLogger("src.tts.pipeline")
 
 
 def _tts_synthesize_only(
@@ -339,14 +338,12 @@ async def reply_worker(
                 if requester_msgs:
                     combined = " ".join((getattr(m, "message", "") or "") for m in requester_msgs)
                     spread_count = tarot.get("spread_count", 3)
-                    pending_numbers = tarot.get("pending_numbers") or []
                     context = chat_history.get_context_messages()
                     selection = await asyncio.to_thread(
                         groq_client.process_tarot_selection,
                         combined.strip(),
                         spread_count,
                         context,
-                        pending_numbers,
                     )
                     if selection.get("tarot_cancel"):
                         overlay_state["tarot"] = None
@@ -372,7 +369,6 @@ async def reply_worker(
                     logger.info("타로 선택 결과: numbers=%s, spread_count=%s", numbers, spread_count)
                     # 중복 안내 시 누적 번호 비우고 처음부터 다시 뽑게 함
                     if numbers is None and "중복" in (selection.get("response") or ""):
-                        overlay_state["tarot"] = {**tarot, "pending_numbers": []}
                         try:
                             path = await asyncio.to_thread(
                                 _tts_synthesize_only,
@@ -524,6 +520,11 @@ async def reply_worker(
             # ----- 일반 채팅 처리
             for m in pending_msgs:
                 print(f"  [대기] {m.user}: {m.message}")
+                ai_dialog_logger.info(
+                    "viewer_message: user=%s message=%r",
+                    (m.user or "?"),
+                    (m.message or ""),
+                )
                 chat_history.add_user_message(m.user or "?", m.message or "")
 
             chat_history.flush_summary(groq_client)
@@ -546,6 +547,13 @@ async def reply_worker(
                     continue
                 chat_history.add_assistant_message(ai_response.response)
                 print(f"  → [감정:{ai_response.emotion}] {ai_response.response}")
+                ai_dialog_logger.info(
+                    "assistant_reply: emotion=%s action=%s response=%r tts_text=%r",
+                    ai_response.emotion,
+                    getattr(ai_response, "action", None),
+                    (ai_response.response or ""),
+                    (getattr(ai_response, "tts_text", None) or ""),
+                )
 
                 # ----- Groq가 타로 액션을 반환한 경우: 진행 중(selecting/revealed)이면 새 타로로 덮어쓰지 않음
                 action = getattr(ai_response, "action", None)
@@ -596,6 +604,11 @@ async def reply_worker(
                 path = None
                 if tts_input.strip() and tts_input != ".":
                     try:
+                        tts_pipeline_logger.info(
+                            "tts_synthesize_start: emotion=%s text=%r",
+                            ai_response.emotion,
+                            tts_input,
+                        )
                         path = await asyncio.to_thread(
                             _tts_synthesize_only,
                             tts_service,
@@ -603,9 +616,19 @@ async def reply_worker(
                             ai_response.emotion,
                             "Korean",
                         )
+                        tts_pipeline_logger.info(
+                            "tts_synthesize_done: path=%s",
+                            path,
+                        )
                     except Exception as tts_e:
                         logger.exception("TTS 오류: %s", tts_e)
+                        tts_pipeline_logger.exception("tts_synthesize_error: %s", tts_e)
                         path = None
+                else:
+                    tts_pipeline_logger.info(
+                        "tts_skipped: empty_or_placeholder_input response=%r",
+                        ai_response.response or "",
+                    )
                 overlay_state.setdefault("assistant_messages", []).append({
                     "message": str(ai_response.response or ""),
                     "ts": time.time(),
@@ -628,6 +651,7 @@ async def reply_worker(
                 if path:
                     try:
                         is_speaking[0] = True
+                        tts_pipeline_logger.info("tts_play_start: path=%s", path)
                         play_task = asyncio.create_task(
                             asyncio.to_thread(tts_service.play_file, path)
                         )
@@ -637,8 +661,10 @@ async def reply_worker(
                                 vts_client, start_x=0.8, start_y=-0.9, duration_sec=0.4
                             )
                         await play_task
+                        tts_pipeline_logger.info("tts_play_done: path=%s", path)
                     except Exception as play_e:
                         logger.warning("재생 실패: %s", play_e)
+                        tts_pipeline_logger.exception("tts_play_error: %s", play_e)
                     finally:
                         is_speaking[0] = False
             chat_history.flush_summary(groq_client)
@@ -725,6 +751,7 @@ async def main():
     )
 
     print(f"플랫폼: {client.platform_name}, 채널: {channel_id}")
+    print(f"로그 저장 경로: {LOG_DIR}")
     print("채팅 수신 중... (큐 → 말 끝난 뒤 일괄 처리 + 히스토리) (종료: Ctrl+C)\n")
     try:
         await client.start()

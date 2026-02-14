@@ -10,6 +10,7 @@
 - **멀티모달 반응**: 답변 내용에 맞춘 포즈, 립싱크 동시 수행
 - **정밀 캐릭터 제어**: VTube Studio API를 통한 부드러운 움직임 구현
 - **방송 오버레이**: OBS 브라우저 소스로 시청자 채팅 / AI 답변 표시 (클리어·방장 채팅 숨김 토글)
+- **분리 로깅**: 통합/에러/카테고리 로그 파일 자동 저장 (`logs/`)
 
 ## 📋 요구사항
 
@@ -53,7 +54,8 @@ venv\Scripts\activate  # Windows
    - 로그인 리디렉션 URL 등록 (예: `http://localhost:8080/callback`)
 
 5. 환경 변수 설정
-- 프로젝트 루트에 `.env` 파일을 생성하세요.
+- 프로젝트 루트에서 `.env.example`을 복사해 `.env`를 만드세요.
+  - 예: `cp .env.example .env` (Windows PowerShell: `Copy-Item .env.example .env`)
 - **실행 시 필수**: CHZZK_CHANNEL_ID, CHZZK_ACCESS_TOKEN, GROQ_API_KEY
 - **토큰 발급 시 필요** (한 번만): CHZZK_CLIENT_ID, CHZZK_CLIENT_SECRET, CHZZK_REDIRECT_URI ([docs/CHZZK_API_RESEARCH.md](docs/CHZZK_API_RESEARCH.md) 참고)
 - **선택**: GROQ_MODEL(기본 openai/gpt-oss-120b), TTS_REMOTE_URL(원격 TTS 사용 시), OVERLAY_PORT(기본 8765), TTS_OUTPUT_DEVICE(VB-Cable 등). 자세한 예시는 [docs/QUICK_START.md](docs/QUICK_START.md) 참고.
@@ -72,6 +74,7 @@ venv\Scripts\activate  # Windows
 - **VTS 포즈**: `config/pose_mapping.json`으로 감정별 파라미터 설정. 최초 연결 시 토큰은 `config/vts_token.txt`에 저장됩니다. ([docs/VTUBE_STUDIO.md](docs/VTUBE_STUDIO.md))
 - **원격 TTS**: Colab 또는 맥(MLX)에서 TTS 서버를 띄운 뒤 `.env`에 `TTS_REMOTE_URL` 설정 시 로컬 대신 원격 TTS 사용. ([docs/COLAB_TTS.md](docs/COLAB_TTS.md), [mac_tts_server/README.md](mac_tts_server/README.md))
 - **방송 오버레이**: `chzzk_groq_example.py` 실행 시 같은 프로세스에서 오버레이 서버가 백그라운드로 뜹니다. OBS에서 브라우저 소스 추가 → URL에 `http://127.0.0.1:8765/` (포트 변경 시 `.env`에 `OVERLAY_PORT` 설정). 화면에 시청자 채팅 / AI 답변 컬럼, 클리어·방장 채팅 숨김 토글 제공.
+- **로깅**: 실행 시 `logs/` 폴더에 통합/에러/카테고리 로그가 자동 저장됩니다. noisy 로그(`engineio.client`)는 `.env`의 `ENGINEIO_LOG_LEVEL`로 조절할 수 있습니다. ([docs/LOGGING.md](docs/LOGGING.md))
 - 자세한 요구사항은 [PRD.md](PRD.md)를 참고하세요.
 
 ## 🎮 사용법
@@ -145,6 +148,7 @@ aischoco/
 - [docs/VTUBE_STUDIO.md](docs/VTUBE_STUDIO.md) - VTube Studio 연결 및 감정 포즈 설정 (pose_mapping.json)
 - [docs/COLAB_TTS.md](docs/COLAB_TTS.md) - Colab 원격 TTS 사용 (TTS_REMOTE_URL)
 - [docs/TAROT_OVERLAY.md](docs/TAROT_OVERLAY.md) - 타로 오버레이 설계·구현 정리 (카드 시각화, 질문 유형별 JSON)
+- [docs/LOGGING.md](docs/LOGGING.md) - 로그 파일 구조, 레벨, 회전 설정
 - [mac_tts_server/README.md](mac_tts_server/README.md) - 맥(Apple Silicon) TTS API 서버 (MLX, 원격 TTS)
 
 ## 🔗 참고 자료
